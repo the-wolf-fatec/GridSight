@@ -1,0 +1,2 @@
+C:/Users/Carlos/Desktop/Pasta API PRONTA/frontend/build/.cxx/release/5r6n1x2f/x86_64/CMakeFiles/edit_cache.dir
+C:/Users/Carlos/Desktop/Pasta API PRONTA/frontend/build/.cxx/release/5r6n1x2f/x86_64/CMakeFiles/rebuild_cache.dir
