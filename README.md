@@ -1,6 +1,6 @@
 <p align="center">
   <img
-    src="assets/gridsight.png"
+    src="gridsight.png"
     alt="GridSight"
     width="100%"
   />
