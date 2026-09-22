@@ -6,6 +6,7 @@
   />
 </p>
 
+
 # GridSight
 
 Planejamento Otimizado de Cobertura de Radiofrequência para Redes de
