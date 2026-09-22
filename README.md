@@ -1,3 +1,11 @@
+<p align="center">
+  <img
+    src="assets/gridsight.png"
+    alt="GridSight"
+    width="100%"
+  />
+</p>
+
 # GridSight
 
 Planejamento Otimizado de Cobertura de Radiofrequência para Redes de
