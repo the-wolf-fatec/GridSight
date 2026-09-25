@@ -1,0 +1,56 @@
+# ============================
+# Flutter / Dart (frontend/)
+# ============================
+frontend/build/
+frontend/.dart_tool/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/.metadata
+frontend/.packages
+frontend/.pub-cache/
+frontend/.pub/
+frontend/pubspec.lock
+frontend/*.iml
+frontend/*.ipr
+frontend/*.iws
+frontend/.idea/
+
+# Plataformas geradas pelo "flutter create ." — ios/web/windows/linux/macos
+# continuam fora (recriáveis com "flutter create ."), mas android/ está
+# incluído no repositório porque tem o usesCleartextTraffic já configurado.
+frontend/ios/
+frontend/web/
+frontend/windows/
+frontend/linux/
+frontend/macos/
+
+# Cache de build nativo dentro do android/ (recriado sozinho, pode ser
+# pesado — centenas de MB). ** cobre qualquer nível de subpasta.
+frontend/android/app/.cxx/
+frontend/android/**/jni/
+frontend/android/.gradle/
+frontend/android/app/build/
+frontend/android/build/
+frontend/android/local.properties
+
+# Arquivos de ambiente sensíveis, se algum dia existirem
+frontend/.env
+
+# ============================
+# Java / Maven (backend/)
+# ============================
+backend/target/
+backend/.mvn/
+backend/*.iml
+backend/*.ipr
+backend/*.iws
+backend/.idea/
+backend/HELP.md
+
+# ============================
+# Geral / IDEs / SO
+# ============================
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
