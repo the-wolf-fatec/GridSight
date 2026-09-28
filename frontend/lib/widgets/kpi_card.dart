@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
+/// Cartão de indicador (número + rótulo), usado no Painel e em Indicadores.
+///
+/// O parâmetro [icon] continua existindo só por compatibilidade com quem já
+/// chama este widget passando um ícone — ele não é mais desenhado, pra
+/// manter os cards limpos (só número + texto, sem decoração).
 class KpiCard extends StatelessWidget {
   final String label;
   final String value;
-  final IconData? icon;
-  final bool showIcon;
+  final IconData? icon; // aceito, mas ignorado de propósito
   final Color accent;
   final String? subtitle;
 
@@ -14,7 +18,6 @@ class KpiCard extends StatelessWidget {
     required this.label,
     required this.value,
     this.icon,
-    this.showIcon = true,
     this.accent = AppColors.coverage,
     this.subtitle,
   });
@@ -31,41 +34,18 @@ class KpiCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (showIcon && icon != null) ...[
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: accent.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(icon, color: accent, size: 20),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-              ],
               Text(
                 value,
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.textPrimary,
-                ),
+                style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: accent),
               ),
               const SizedBox(height: 4),
               Text(
                 label,
-                style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary, fontWeight: FontWeight.w600),
               ),
               if (subtitle != null) ...[
                 const SizedBox(height: 2),
-                Text(
-                  subtitle!,
-                  style: TextStyle(fontSize: 12, color: accent, fontWeight: FontWeight.w600),
-                ),
+                Text(subtitle!, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
               ],
             ],
           ),
