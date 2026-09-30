@@ -359,3 +359,5 @@ INSERT INTO candidate_site (id, name, type, latitude, longitude, distribuidora) 
 
 -- Total: 41 subestações + 315 postes = 356 locais candidatos
 
+
+SELECT COUNT(*) AS total_candidatos_novos FROM candidate_site WHERE id LIKE 'bdgd-sub-%' OR id LIKE 'bdgd-untrmt-%';
