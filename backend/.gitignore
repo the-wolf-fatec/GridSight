@@ -1,0 +1,50 @@
+# --- Dados pesados e gerados (não vão para o Git) ---
+backend/terrain/*.hgt
+frontend/bdgd_cache/
+dados/bdgd_cache/
+bdgd_cache/
+bdgd_geojson/
+*.zip
+*.zip.part
+*.gdb/
+dados/gridsight_dados_aneel_30.sql
+frontend/gridsight_dados_aneel_30.sql
+titulos_bdgd.txt
+
+# --- Segredos ---
+.env
+application-local.properties
+backend/src/main/resources/application-local.properties
+backend/src/main/resources/application.properties
+frontend/android/local.properties
+frontend/android/key.properties
+
+# --- Backend (Java / Maven) ---
+backend/target/
+*.class
+*.log
+hs_err_pid*
+
+# --- IntelliJ ---
+.idea/
+*.iml
+out/
+
+# --- Frontend (Flutter) ---
+frontend/.dart_tool/
+frontend/build/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/.packages
+frontend/.pub-cache/
+frontend/.pub/
+frontend/pubspec.lock
+
+# --- Python ---
+__pycache__/
+*.pyc
+
+# --- Sistema e editores ---
+.DS_Store
+Thumbs.db
+.vscode/
