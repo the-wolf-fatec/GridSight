@@ -44,6 +44,7 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMixin {
   bool showAssets = true, showCandidates = true, showGateways = true, showCoverage = true;
   bool showRelief = false; // camada de relevo (sombreado + altitude) do backend
+  bool showClutter = false; // camada de árvores (verde) e prédios (laranja) do OpenStreetMap, via backend
   bool showCircles = true; // (fixo ligado) // círculo do alcance máximo (sem relevo), para comparar com a área real
   String? _selectedGatewayId; // gateway tocado: destaca círculo x área com relevo
   bool _addMode = false; // true = tocar no mapa cria um local candidato ali
@@ -324,6 +325,8 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
       }) {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (sheetContext) {
@@ -333,7 +336,10 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
             final loading = snapshot.connectionState == ConnectionState.waiting;
             final cidade = snapshot.data?['cidade'] ?? '';
             final bairro = snapshot.data?['bairro'] ?? '';
-            return Padding(
+            return ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+              child: SingleChildScrollView(
+                child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
               child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text(name, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
@@ -374,6 +380,8 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                   ]),
                 ],
               ]),
+                ),
+              ),
             );
           },
         );
@@ -544,6 +552,8 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
     final result = await showDialog<(String, String)>(
       context: context,
       builder: (ctx) => AlertDialog(
+        scrollable: true,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
         title: const Text('Novo local candidato'),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           TextField(controller: nameCtrl, autofocus: true, decoration: const InputDecoration(labelText: 'Nome do local', hintText: 'Ex.: Poste Rua das Flores')),
@@ -643,6 +653,12 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                         userAgentPackageName: 'com.gridsight.app',
                         errorTileCallback: (tile, error, stack) => debugPrint('Tile de relevo falhou: $error'),
                       ),
+                    if (showClutter && app.backendBaseUrl != null)
+                      TileLayer(
+                        urlTemplate: '${app.backendBaseUrl}/clutter/tiles/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.gridsight.app',
+                        errorTileCallback: (tile, error, stack) => debugPrint('Tile de árvores e prédios falhou: $error'),
+                      ),
                     // Círculo do alcance máximo (como seria sem relevo): é o que o relevo "quebra".
                     if (showCircles && result != null && terrain != null && hasFootprints)
                       CircleLayer(circles: [
@@ -700,14 +716,14 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                                 noteColor: AppColors.energy,
                                 onConfirmGateway: () => app.usePeak(pk),
                               ),
-                              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                              child: FittedBox(fit: BoxFit.scaleDown, child: Column(mainAxisSize: MainAxisSize.min, children: [
                                 Icon(Icons.change_history, size: 24, color: AppColors.energy, shadows: const [Shadow(color: Colors.black87, blurRadius: 4)]),
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                                   decoration: BoxDecoration(color: Colors.black.withOpacity(0.8), borderRadius: BorderRadius.circular(4), border: Border.all(color: AppColors.energy)),
                                   child: Text('${pk.elevationM.round()} m · +${pk.newlyCovered}', style: const TextStyle(color: Colors.white, fontSize: 10.5, fontWeight: FontWeight.w700)),
                                 ),
-                              ]),
+                              ])),
                             ),
                           ),
                       ]),
@@ -732,14 +748,14 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                                     note: 'O sinal não passa: o morro tem ${o.elevationM.round()} m e fica ${o.aboveLineOfSightM.round()} m acima da linha de alcance, a ${o.distanceKm.toStringAsFixed(1)} km do gateway.',
                                     noteColor: _lostColor,
                                   ),
-                                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                                  child: FittedBox(fit: BoxFit.scaleDown, child: Column(mainAxisSize: MainAxisSize.min, children: [
                                     Icon(Icons.landscape, size: 20, color: _lostColor, shadows: const [Shadow(color: Colors.black54, blurRadius: 3)]),
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                                       decoration: BoxDecoration(color: Colors.black.withOpacity(0.7), borderRadius: BorderRadius.circular(4)),
                                       child: Text('${o.elevationM.round()} m · área sem cobertura (relevo)', style: const TextStyle(color: Colors.white, fontSize: 10.5, fontWeight: FontWeight.w600)),
                                     ),
-                                  ]),
+                                  ])),
                                 ),
                               ),
                       ]),
@@ -772,14 +788,14 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                           point: terrain.lostInfo[_blinkAssetId]!.blocker!.point,
                           width: 220,
                           height: 44,
-                          child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          child: FittedBox(fit: BoxFit.scaleDown, child: Column(mainAxisSize: MainAxisSize.min, children: [
                             Icon(Icons.landscape, size: 22, color: _lostColor, shadows: const [Shadow(color: Colors.black54, blurRadius: 3)]),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                               decoration: BoxDecoration(color: Colors.black.withOpacity(0.75), borderRadius: BorderRadius.circular(4)),
                               child: Text('${terrain.lostInfo[_blinkAssetId]!.blocker!.elevationM.round()} m · área sem cobertura (relevo)', style: const TextStyle(color: Colors.white, fontSize: 10.5, fontWeight: FontWeight.w600)),
                             ),
-                          ]),
+                          ])),
                         ),
                       ]),
                     if (showAssets)
@@ -853,7 +869,7 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                   ],
                 ),
               ),
-              Positioned(top: wide ? 12 : 8, left: wide ? 12 : 8, child: _Legend(distribuidoras: app.candidateSitesByDistribuidora.keys.toList(), hasTerrain: terrain != null)),
+              Positioned(top: wide ? 12 : 8, left: wide ? 12 : 8, child: _Legend(key: ValueKey(wide), distribuidoras: app.candidateSitesByDistribuidora.keys.toList(), hasTerrain: terrain != null, showClutter: showClutter, initiallyOpen: wide)),
               Positioned(
                 top: wide ? 12 : 8,
                 right: wide ? 12 : 8,
@@ -969,6 +985,7 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
           ('Gateways escolhidos', showGateways, (v) => setState(() => showGateways = v)),
           if (!hasFootprints) ('Área de cobertura', showCoverage, (v) => setState(() => showCoverage = v)),
           if (app.backendBaseUrl != null) ('Relevo', showRelief, (v) => setState(() { showRelief = v; _syncBlink(); })),
+          if (app.backendBaseUrl != null) ('Árvores e prédios', showClutter, (v) => setState(() => showClutter = v)),
         ];
         final controls = _controls(app, result, toggles);
 
@@ -1102,30 +1119,71 @@ Widget _addModeButton(bool active, VoidCallback onPressed) => Material(
   ),
 );
 
-class _Legend extends StatelessWidget {
-  const _Legend({required this.distribuidoras, this.hasTerrain = false});
+/// Legenda do mapa. No celular começa fechada (só o botão "Legenda") para
+/// não cobrir o mapa; no tablet/tela grande começa aberta. Quando aberta,
+/// rola se for maior que a área disponível.
+class _Legend extends StatefulWidget {
+  const _Legend({super.key, required this.distribuidoras, this.hasTerrain = false, this.showClutter = false, this.initiallyOpen = true});
   final List<String> distribuidoras;
   final bool hasTerrain;
+  final bool showClutter;
+  final bool initiallyOpen;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-    decoration: BoxDecoration(color: AppColors.surface.withOpacity(0.92), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.divider)),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-      _legendItem(AppColors.coverage, 'Ativo coberto', BoxShape.circle),
-      _legendItem(AppColors.alert, 'Ativo não coberto', BoxShape.circle),
-      if (hasTerrain) _legendItem(_lostColor, 'Ativo sem sinal (relevo)', BoxShape.circle),
-      if (hasTerrain) _legendItem(Colors.white70, 'Alcance sem relevo', BoxShape.circle, filled: false),
-      if (hasTerrain) _legendItem(_lostColor.withOpacity(0.6), 'Área sem transmissão (relevo)', BoxShape.rectangle, size: 11),
-      if (hasTerrain) _legendItem(AppColors.coverage, 'Cobertura com relevo', BoxShape.rectangle, size: 11),
-      if (distribuidoras.isEmpty)
-        _legendItem(AppColors.textSecondary, 'Local candidato', BoxShape.rectangle, filled: false)
-      else
-        for (final d in distribuidoras) _legendItem(distribuidoraColor(d), 'Candidato ($d)', BoxShape.rectangle, size: 11),
-      _legendItem(_algoGatewayColor, 'Gateway (algoritmo)', BoxShape.rectangle, size: 13),
-      _legendItem(AppColors.energy, 'Gateway (manual)', BoxShape.rectangle, size: 13),
-    ]),
-  );
+  State<_Legend> createState() => _LegendState();
+}
+
+class _LegendState extends State<_Legend> {
+  late bool _open = widget.initiallyOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasTerrain = widget.hasTerrain;
+    final distribuidoras = widget.distribuidoras;
+    final maxH = MediaQuery.of(context).size.height * 0.4;
+    return Container(
+      constraints: BoxConstraints(maxWidth: 230, maxHeight: maxH),
+      decoration: BoxDecoration(color: AppColors.surface.withOpacity(0.92), borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.divider)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => setState(() => _open = !_open),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.list_alt, size: 16, color: AppColors.textSecondary),
+              const SizedBox(width: 6),
+              const Text('Legenda', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+              const SizedBox(width: 4),
+              Icon(_open ? Icons.expand_less : Icons.expand_more, size: 18, color: AppColors.textSecondary),
+            ]),
+          ),
+        ),
+        if (_open)
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                _legendItem(AppColors.coverage, 'Ativo coberto', BoxShape.circle),
+                _legendItem(AppColors.alert, 'Ativo não coberto', BoxShape.circle),
+                if (hasTerrain) _legendItem(_lostColor, 'Ativo sem sinal (relevo)', BoxShape.circle),
+                if (hasTerrain) _legendItem(Colors.white70, 'Alcance sem relevo', BoxShape.circle, filled: false),
+                if (hasTerrain) _legendItem(_lostColor.withOpacity(0.6), 'Área sem transmissão (relevo)', BoxShape.rectangle, size: 11),
+                if (hasTerrain) _legendItem(AppColors.coverage, 'Cobertura com relevo', BoxShape.rectangle, size: 11),
+                if (widget.showClutter) _legendItem(const Color(0xFF2EA043), 'Árvores / mata', BoxShape.rectangle, size: 11),
+                if (widget.showClutter) _legendItem(const Color(0xFFE07028), 'Prédios', BoxShape.rectangle, size: 11),
+                if (distribuidoras.isEmpty)
+                  _legendItem(AppColors.textSecondary, 'Local candidato', BoxShape.rectangle, filled: false)
+                else
+                  for (final d in distribuidoras) _legendItem(distribuidoraColor(d), 'Candidato ($d)', BoxShape.rectangle, size: 11),
+                _legendItem(_algoGatewayColor, 'Gateway (algoritmo)', BoxShape.rectangle, size: 13),
+                _legendItem(AppColors.energy, 'Gateway (manual)', BoxShape.rectangle, size: 13),
+              ]),
+            ),
+          ),
+      ]),
+    );
+  }
 }
 
 Widget _legendItem(Color color, String label, BoxShape shape, {bool filled = true, double size = 10}) => Padding(
@@ -1133,7 +1191,7 @@ Widget _legendItem(Color color, String label, BoxShape shape, {bool filled = tru
   child: Row(mainAxisSize: MainAxisSize.min, children: [
     Container(width: size, height: size, decoration: BoxDecoration(color: filled ? color : Colors.transparent, shape: shape, borderRadius: shape == BoxShape.rectangle ? BorderRadius.circular(2) : null, border: filled ? null : Border.all(color: color, width: 1.6))),
     const SizedBox(width: 6),
-    Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textPrimary)),
+    Flexible(child: Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textPrimary))),
   ]),
 );
 
@@ -1169,6 +1227,8 @@ Widget _controls(AppState app, dynamic result, List<(String, bool, ValueChanged<
           _resultLine('Gateways usados', '${result.gatewaysUsed}'),
           _resultLine('Ativos cobertos', '${result.coveredAssets} / ${result.totalAssets}'),
           _resultLine('Relevo', result.params.useTerrain ? 'considerado' : 'não considerado'),
+          if (result.params.useTerrain)
+            _resultLine('Árvores e prédios', (terrain?.clutterUsed ?? false) ? 'considerados' : 'não considerados'),
           _resultLine('Tempo de processamento', '${result.processingTime.inMilliseconds} ms'),
         ],
         if (terrain != null && result != null && result.params.useTerrain) ...[
