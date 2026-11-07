@@ -22,10 +22,21 @@ import 'screens/login_screen.dart';
 ///             rodando, ex.: numa apresentação).
 const bool useBackend = true;
 
-/// Endereço do backend Spring Boot. Se for testar em um emulador Android,
-/// troque 'localhost' por '10.0.2.2' (o alias padrão do emulador para a
-/// máquina host). Em um dispositivo físico, use o IP da máquina na rede.
-const String backendBaseUrl = 'http://localhost:8080/api';
+/// Endereço do backend Spring Boot.
+///
+/// Por padrão é `http://localhost:8080/api` (serve para o Chrome e para o Windows).
+/// Para trocar SEM mexer no código, passe o endereço na hora de rodar:
+///
+///   flutter run -d <id> --dart-define=BACKEND_URL=http://192.168.0.15:8080/api
+///
+/// Celular Android ligado por cabo USB: o jeito mais simples é deixar `localhost` e rodar,
+/// no computador, `adb reverse tcp:8080 tcp:8080` — assim o `localhost` do celular
+/// aponta para o backend do computador (sem precisar de Wi-Fi nem de IP).
+/// Emulador Android: use `--dart-define=BACKEND_URL=http://10.0.2.2:8080/api`.
+const String backendBaseUrl = String.fromEnvironment(
+  'BACKEND_URL',
+  defaultValue: 'http://localhost:8080/api',
+);
 
 void main() {
   runApp(const GridSightApp());
@@ -61,6 +72,15 @@ class GridSightApp extends StatelessWidget {
         title: 'GridSight',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.dark,
+        // Limita o tamanho de fonte do sistema (alguns celulares usam fonte
+        // grande demais e quebram o layout): entre 90% e 115%.
+        builder: (context, child) {
+          final mq = MediaQuery.of(context);
+          return MediaQuery(
+            data: mq.copyWith(textScaler: mq.textScaler.clamp(minScaleFactor: 0.9, maxScaleFactor: 1.15)),
+            child: child ?? const SizedBox.shrink(),
+          );
+        },
         home: Consumer<AppState>(
           builder: (context, app, _) => app.isAuthenticated ? const HomeShell() : const LoginScreen(),
         ),
