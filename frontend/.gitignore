@@ -1,12 +1,11 @@
 @"
 .dart_tool/
 build/
+.idea/
+*.iml
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
-.pub-cache/
-.pub/
-*.iml
-.idea/
-.vscode/
-"@ | Set-Content -Encoding ascii .gitignore
+android/.gradle/
+android/local.properties
+"@ | Set-Content .gitignore -Encoding utf8
