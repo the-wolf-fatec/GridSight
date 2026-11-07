@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../models/coverage_params.dart';
 import '../theme/app_theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/section_title.dart';
 
 class ParametersScreen extends StatelessWidget {
@@ -14,10 +15,11 @@ class ParametersScreen extends StatelessWidget {
     final p = app.params;
     void update(CoverageParams next) => app.updateParams(next);
 
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
+    return PageBody(
+      maxWidth: 760,
+      builder: (context, w) {
+        final phone = w < 520;
+        return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const SectionTitle(title: 'Parâmetros de Cobertura'),
@@ -40,16 +42,19 @@ class ParametersScreen extends StatelessWidget {
                     const SizedBox(height: 14),
                     Wrap(spacing: 10, runSpacing: 10, children: [
                       _PresetChip(
+                        fullWidth: phone,
                         label: 'Bairro / Cidade pequena',
                         sublabel: '~2,5 km (ex.: SJC, Caçapava)',
                         onTap: () => update(p.copyWith(rangeKm: 2.5, transmissionPowerDbm: 20, maxGateways: 12)),
                       ),
                       _PresetChip(
+                        fullWidth: phone,
                         label: 'Região metropolitana',
                         sublabel: '~15 km (ex.: Enel SP, Grande SP)',
                         onTap: () => update(p.copyWith(rangeKm: 15, transmissionPowerDbm: 25, maxGateways: 40)),
                       ),
                       _PresetChip(
+                        fullWidth: phone,
                         label: 'Estado inteiro',
                         sublabel: '~40 km (várias distribuidoras juntas)',
                         onTap: () => update(p.copyWith(rangeKm: 40, transmissionPowerDbm: 30, maxGateways: 150)),
@@ -129,10 +134,29 @@ class ParametersScreen extends StatelessWidget {
                 ),
               ),
             ),
+            if (p.useTerrain) ...[
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(Icons.forest_outlined, size: 18, color: AppColors.coverage),
+                    title: const Text('Árvores e prédios', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                    subtitle: const Text(
+                      'Usa matas e construções do OpenStreetMap (com altura) como obstáculos. Na primeira vez baixa os dados da região; depois fica salvo.',
+                      style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                    ),
+                    value: p.useClutter,
+                    onChanged: (v) => update(p.copyWith(useClutter: v)),
+                  ),
+                ),
+              ),
+            ],
             if (p.useTerrain) _TerrainWarning(app: app),
           ],
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -140,7 +164,8 @@ class ParametersScreen extends StatelessWidget {
 class _PresetChip extends StatelessWidget {
   final String label, sublabel;
   final VoidCallback onTap;
-  const _PresetChip({required this.label, required this.sublabel, required this.onTap});
+  final bool fullWidth;
+  const _PresetChip({required this.label, required this.sublabel, required this.onTap, this.fullWidth = false});
 
   @override
   Widget build(BuildContext context) {
@@ -151,7 +176,7 @@ class _PresetChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(10),
         onTap: onTap,
         child: Container(
-          width: 190,
+          width: fullWidth ? double.infinity : 190,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.divider)),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
