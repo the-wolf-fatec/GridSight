@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/kpi_card.dart';
 import '../widgets/manual_asset_form_modal.dart';
 import '../widgets/manual_candidate_form_modal.dart';
@@ -22,33 +23,36 @@ class DashboardScreen extends StatelessWidget {
       ('Gateways utilizados', result == null ? '—' : '${result.gatewaysUsed}', Icons.router_outlined, AppColors.alert),
     ];
 
-    return SafeArea(
-      child: LayoutBuilder(builder: (context, cts) {
-        final wide = cts.maxWidth > 900;
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              const Expanded(child: SectionTitle(title: 'Painel Geral')),
-              OutlinedButton.icon(onPressed: canAdd ? () => openManualCandidateForm(context, app) : null, icon: const Icon(Icons.add_location_alt_outlined, size: 18), label: const Text('Novo candidato')),
-              const SizedBox(width: 10),
-              OutlinedButton.icon(onPressed: canAdd ? () => openManualAssetForm(context, app) : null, icon: const Icon(Icons.add, size: 18), label: const Text('Novo ativo')),
-            ]),
-            const SizedBox(height: 12),
-            _statusBanner(app),
-            const SizedBox(height: 20),
-            GridView.count(
-              crossAxisCount: wide ? 4 : (cts.maxWidth > 560 ? 2 : 1),
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 14,
-              crossAxisSpacing: 14,
-              childAspectRatio: wide ? 1.5 : 1.7,
-              children: [for (final (l, v, i, a) in kpis) KpiCard(label: l, value: v, icon: i, accent: a)],
+    return PageBody(
+      builder: (context, w) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Título SEMPRE em cima, na horizontal; os botões ficam logo abaixo
+        // e quebram de linha sozinhos se a tela for estreita.
+        const SectionTitle(title: 'Painel Geral'),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            OutlinedButton.icon(
+              style: compactOutlined(),
+              onPressed: canAdd ? () => openManualCandidateForm(context, app) : null,
+              icon: const Icon(Icons.add_location_alt_outlined, size: 18),
+              label: const Text('Novo candidato'),
             ),
-          ]),
-        );
-      }),
+            OutlinedButton.icon(
+              style: compactOutlined(),
+              onPressed: canAdd ? () => openManualAssetForm(context, app) : null,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Novo ativo'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        _statusBanner(app),
+        const SizedBox(height: 16),
+        ResponsiveGrid(
+          children: [for (final (l, v, i, a) in kpis) KpiCard(label: l, value: v, icon: i, accent: a)],
+        ),
+      ]),
     );
   }
 }

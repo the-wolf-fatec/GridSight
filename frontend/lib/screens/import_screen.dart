@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/manual_asset_form_modal.dart';
 import '../widgets/manual_candidate_form_modal.dart';
 import '../widgets/section_title.dart';
@@ -26,10 +27,8 @@ class _ImportScreenState extends State<ImportScreen> {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
 
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    return PageBody(
+      builder: (context, w) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const SectionTitle(title: 'Importação de Dados'),
           if (app.dataError != null) _errorBanner(app.dataError!, () => app.loadDistribuidoras()),
           Card(
@@ -58,7 +57,7 @@ class _ImportScreenState extends State<ImportScreen> {
                           onChanged: (_) => app.toggleDistribuidoraSelection(d),
                           title: Row(children: [
                             Container(width: 10, height: 10, margin: const EdgeInsets.only(right: 8), decoration: BoxDecoration(color: distribuidoraColor(d), shape: BoxShape.circle)),
-                            Text(d, style: const TextStyle(fontSize: 13.5)),
+                            Expanded(child: Text(d, style: const TextStyle(fontSize: 13.5), overflow: TextOverflow.ellipsis)),
                           ]),
                         ),
                     ],
@@ -93,8 +92,7 @@ class _ImportScreenState extends State<ImportScreen> {
               if (cts.maxWidth > 700) return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(child: assetsList), const SizedBox(width: 16), Expanded(child: candidatesList)]);
               return Column(children: [assetsList, const SizedBox(height: 16), candidatesList]);
             }),
-        ]),
-      ),
+      ]),
     );
   }
 }
