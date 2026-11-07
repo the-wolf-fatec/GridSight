@@ -132,7 +132,11 @@ class _ManualFormModalState extends State<_ManualFormModal> {
 
   @override
   Widget build(BuildContext context) {
+    // scrollable: true → com o teclado aberto o formulário rola em vez de
+    // estourar a altura (era a faixa amarela "bottom overflowed").
     return AlertDialog(
+      scrollable: true,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       backgroundColor: AppColors.surface,
       title: Text(widget.title),
       content: SizedBox(
@@ -154,6 +158,7 @@ class _ManualFormModalState extends State<_ManualFormModal> {
               ),
               const SizedBox(height: 14),
               DropdownButtonFormField<String>(
+                isExpanded: true,
                 value: _type,
                 decoration: const InputDecoration(labelText: 'Tipo'),
                 items: [for (final t in widget.typeOptions) DropdownMenuItem(value: t, child: Text(widget.typeLabel(t)))],
@@ -175,6 +180,7 @@ class _ManualFormModalState extends State<_ManualFormModal> {
                       ? const Padding(padding: EdgeInsets.all(12), child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)))
                       : const Icon(Icons.search, size: 20),
                 ),
+                maxLines: 1,
               ),
               if (_placeResults.isNotEmpty)
                 Container(
