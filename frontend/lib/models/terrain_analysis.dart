@@ -102,6 +102,7 @@ class TerrainAnalysis {
   final Map<String, List<List<LatLng>>> shadows; // gatewayId -> buracos do alcance (sem sinal por causa do relevo)
   final Map<String, List<TerrainObstacle>> obstacles; // gatewayId -> morros que bloqueiam o sinal (do mais alto ao mais baixo)
   final List<String> warnings;
+  final bool clutterUsed; // árvores e prédios entraram no cálculo
   final int totalAssets;
   final int coveredAssets;
   final int elapsedMs;
@@ -119,6 +120,7 @@ class TerrainAnalysis {
     this.shadows = const {},
     this.lostInfo = const {},
     required this.warnings,
+    this.clutterUsed = false,
     required this.totalAssets,
     required this.coveredAssets,
     required this.elapsedMs,
@@ -166,6 +168,7 @@ class TerrainAnalysis {
         for (final e in ((j['lostDetails'] as List?) ?? const [])) (e['assetId'].toString()): LostAssetInfo.fromJson(e as Map<String, dynamic>),
       },
       warnings: (j['warnings'] as List).map((e) => e.toString()).toList(),
+      clutterUsed: (j['clutterUsed'] as bool?) ?? false,
       totalAssets: j['totalAssets'] as int,
       coveredAssets: j['coveredAssets'] as int,
       elapsedMs: (j['elapsedMs'] as num).toInt(),

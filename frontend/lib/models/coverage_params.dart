@@ -10,6 +10,7 @@ class CoverageParams {
   final double fadeMarginDb; // margem de segurança do sinal (dB): 0 = só bloqueia o que de fato não chega
   final double gatewayHeightM; // altura da antena do gateway sobre o chão (m)
   final bool useTerrain; // true = considera o relevo (SRTM .hgt) no cálculo de cobertura
+  final bool useClutter; // true = também considera árvores e prédios (OpenStreetMap); só vale com o relevo ligado
 
   /// Potência de referência na qual [rangeKm] foi calibrado.
   static const double referencePowerDbm = 20;
@@ -20,6 +21,7 @@ class CoverageParams {
     this.minCoverageTarget = 1.0,
     this.maxGateways = 12,
     this.useTerrain = true,
+    this.useClutter = true,
     this.gatewayHeightM = 6,
     this.fadeMarginDb = 0,
   });
@@ -43,6 +45,7 @@ class CoverageParams {
     double? minCoverageTarget,
     int? maxGateways,
     bool? useTerrain,
+    bool? useClutter,
     double? gatewayHeightM,
     double? fadeMarginDb,
   }) {
@@ -52,6 +55,7 @@ class CoverageParams {
       minCoverageTarget: minCoverageTarget ?? this.minCoverageTarget,
       maxGateways: maxGateways ?? this.maxGateways,
       useTerrain: useTerrain ?? this.useTerrain,
+      useClutter: useClutter ?? this.useClutter,
       gatewayHeightM: gatewayHeightM ?? this.gatewayHeightM,
       fadeMarginDb: fadeMarginDb ?? this.fadeMarginDb,
     );
