@@ -27,6 +27,7 @@ class PlanningApiService {
         'minCoverageTarget': params.minCoverageTarget,
         'maxGateways': params.maxGateways,
         'useTerrain': true,
+        'useClutter': params.useClutter,
         'groups': [for (final g in groups) g.toJson()],
       };
 
@@ -48,6 +49,7 @@ class PlanningApiService {
       'minCoverageTarget': params.minCoverageTarget,
       'maxGateways': params.maxGateways,
       'useTerrain': params.useTerrain,
+      'useClutter': params.useClutter,
       'groups': [for (final g in groups) g.toJson()],
     };
     final json = await _request('POST', '/planning/run', body: body);
