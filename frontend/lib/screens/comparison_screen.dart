@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/scenario_result.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/section_title.dart';
 
 class ComparisonScreen extends StatefulWidget {
@@ -53,18 +54,19 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
     if (app.loadingScenarioHistory && history.isEmpty) return const Center(child: CircularProgressIndicator());
     if (history.isEmpty) return _emptyState(app.scenarioApi != null ? app.lastSyncError : null);
 
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            const Expanded(child: SectionTitle(title: 'Comparação de Cenários')),
-            TextButton.icon(
-              onPressed: () => _confirm('Apagar todos os cenários?', 'Os ${history.length} cenários do histórico serão removidos permanentemente. Essa ação não pode ser desfeita.', 'Apagar tudo', app.clearAllScenarios),
-              icon: const Icon(Icons.delete_sweep_outlined, size: 18, color: AppColors.alert),
-              label: const Text('Apagar tudo', style: TextStyle(color: AppColors.alert)),
-            ),
-          ]),
+    return PageBody(
+      maxWidth: 1000,
+      builder: (context, w) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SectionTitle(
+            title: 'Comparação de Cenários',
+            actions: [
+              TextButton.icon(
+                onPressed: () => _confirm('Apagar todos os cenários?', 'Os ${history.length} cenários do histórico serão removidos permanentemente. Essa ação não pode ser desfeita.', 'Apagar tudo', app.clearAllScenarios),
+                icon: const Icon(Icons.delete_sweep_outlined, size: 18, color: AppColors.alert),
+                label: const Text('Apagar tudo', style: TextStyle(color: AppColors.alert)),
+              ),
+            ],
+          ),
           if (app.scenarioApi != null && app.lastSyncError != null) _syncErrorBanner(app.lastSyncError!),
           Card(
             child: Padding(
@@ -81,8 +83,7 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
           const SizedBox(height: 12),
           for (final r in history.toList().reversed)
             _scenarioCard(r, () => _confirm('Apagar cenário?', 'O cenário "${r.label}" será removido da comparação. Essa ação não pode ser desfeita.', 'Apagar', () => app.removeScenario(r.id))),
-        ]),
-      ),
+      ]),
     );
   }
 }
@@ -142,16 +143,20 @@ Widget _scenarioCard(ScenarioResult r, VoidCallback onDelete) {
     child: Padding(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Expanded(child: Text(r.label, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5))),
-          Container(
+          const SizedBox(width: 8),
+          IconButton(onPressed: onDelete, icon: const Icon(Icons.delete_outline, size: 20), color: AppColors.textSecondary, tooltip: 'Apagar cenário', splashRadius: 20, constraints: const BoxConstraints(), padding: EdgeInsets.zero),
+        ]),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(color: AppColors.coverage.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
             child: Text('${(r.coveragePercent * 100).toStringAsFixed(1)}% cobertura', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.coverage)),
           ),
-          const SizedBox(width: 8),
-          IconButton(onPressed: onDelete, icon: const Icon(Icons.delete_outline, size: 20), color: AppColors.textSecondary, tooltip: 'Apagar cenário', splashRadius: 20, constraints: const BoxConstraints(), padding: EdgeInsets.zero),
-        ]),
+        ),
         const SizedBox(height: 14),
         Wrap(spacing: 20, runSpacing: 10, children: [for (final (l, v) in stats) _miniStat(l, v)]),
         if (r.chosenGateways.isNotEmpty) ...[

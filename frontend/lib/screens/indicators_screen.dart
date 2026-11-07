@@ -3,6 +3,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/kpi_card.dart';
 import '../widgets/section_title.dart';
 
@@ -23,28 +24,19 @@ class IndicatorsScreen extends StatelessWidget {
       ('Tempo de processamento', '${result.processingTime.inMilliseconds} ms', Icons.speed, AppColors.primaryLight),
     ];
 
-    return SafeArea(
-      child: LayoutBuilder(builder: (context, cts) {
-        final wide = cts.maxWidth > 900;
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    return PageBody(
+      builder: (context, w) {
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const SectionTitle(title: 'Indicadores de Qualidade'),
-            GridView.count(
-              crossAxisCount: wide ? 4 : (cts.maxWidth > 560 ? 2 : 1),
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 14,
-              crossAxisSpacing: 14,
-              childAspectRatio: wide ? 1.5 : 1.7,
+            ResponsiveGrid(
               children: [for (final (l, v, i, a) in kpis) KpiCard(label: l, value: v, icon: i, accent: a)],
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 24),
             LayoutBuilder(builder: (context, c) {
               final donut = _chartCard('Cobertura (rosca)', SizedBox(height: 220, child: Row(children: [
                 Expanded(child: PieChart(PieChartData(sectionsSpace: 3, centerSpaceRadius: 42, sections: [_pie(covered, AppColors.coverage), _pie(uncovered, AppColors.alert)]))),
                 const SizedBox(width: 12),
-                Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: const [_dotLabel(AppColors.coverage, 'Cobertos'), SizedBox(height: 8), _dotLabel(AppColors.alert, 'Não cobertos')]),
+                Flexible(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: const [_dotLabel(AppColors.coverage, 'Cobertos'), SizedBox(height: 8), _dotLabel(AppColors.alert, 'Não cobertos')])),
               ])));
 
               final bars = _chartCard('Cobertos vs. não cobertos', SizedBox(height: 220, child: BarChart(BarChartData(
@@ -65,9 +57,8 @@ class IndicatorsScreen extends StatelessWidget {
               if (c.maxWidth > 760) return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(child: donut), const SizedBox(width: 16), Expanded(child: bars)]);
               return Column(children: [donut, const SizedBox(height: 16), bars]);
             }),
-          ]),
-        );
-      }),
+        ]);
+      },
     );
   }
 }
