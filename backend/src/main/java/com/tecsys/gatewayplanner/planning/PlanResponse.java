@@ -24,7 +24,9 @@ public record PlanResponse(
         List<String> warnings,
         long elapsedMs,
         /** Para cada ativo sem sinal por causa do relevo: altitude do local e o morro que bloqueia. */
-        List<LostAsset> lostDetails) {
+        List<LostAsset> lostDetails,
+        /** Árvores e prédios entraram no cálculo? */
+        boolean clutterUsed) {
 
     /**
      * @param gatewayId   gateway de referência (o mais próximo ao alcance)

@@ -11,6 +11,7 @@ import com.tecsys.gatewayplanner.rf.optimizer.SolutionDetail;
 import com.tecsys.gatewayplanner.rf.propagation.FreeSpaceModel;
 import com.tecsys.gatewayplanner.rf.propagation.LinkResult;
 import com.tecsys.gatewayplanner.rf.propagation.PropagationModel;
+import com.tecsys.gatewayplanner.rf.clutter.ClutterProvider;
 import com.tecsys.gatewayplanner.rf.propagation.TerrainDiffractionModel;
 import com.tecsys.gatewayplanner.rf.terrain.TerrainProvider;
 
@@ -50,6 +51,12 @@ public final class PlanningEngine {
     }
 
     public static PlanResponse run(PlanRequest req, TerrainProvider terrain, double fadeMarginDb) {
+        return run(req, terrain, null, List.of(), fadeMarginDb);
+    }
+
+    /** {@code clutter} = árvores e prédios (null = só relevo); {@code preWarnings} entram no começo dos avisos. */
+    public static PlanResponse run(PlanRequest req, TerrainProvider terrain, ClutterProvider clutter,
+                                   List<String> preWarnings, double fadeMarginDb) {
         long t0 = System.nanoTime();
         if (!(req.rangeKm > 0)) throw new IllegalArgumentException("O alcance deve ser maior que zero.");
 
@@ -69,12 +76,13 @@ public final class PlanningEngine {
 
         boolean useTerrain = req.useTerrain;
         boolean dataFound = !useTerrain || terrainDataPresent(req, terrain);
-        List<String> warnings = new ArrayList<>();
+        List<String> warnings = new ArrayList<>(preWarnings);
         if (useTerrain && !dataFound) {
             warnings.add("Nenhum arquivo de relevo (.hgt) foi encontrado para esta região. O cálculo usou só a distância. "
                     + "Confira a pasta 'terrain' (GET /api/planning/terrain-status).");
             useTerrain = false;
         }
+        ClutterProvider activeClutter = useTerrain && req.useClutter ? clutter : null;
 
         List<String> chosenIds = new ArrayList<>();
         List<PlanResponse.Link> links = new ArrayList<>();
@@ -103,7 +111,7 @@ public final class PlanningEngine {
             RadioParams mainP = distanceOnly;
             PropagationModel model = new FreeSpaceModel();
             if (useTerrain) {
-                model = new TerrainDiffractionModel(terrain);
+                model = new TerrainDiffractionModel(terrain, activeClutter);
                 mainM = CoverageCalculator.compute(cands, assets, withTerrain, model);
                 mainP = withTerrain;
                 linksMissing += mainM.linksMissingTerrain();
@@ -186,7 +194,7 @@ public final class PlanningEngine {
 
         PlanResponse.Comparison cmp = anyComparison ? new PlanResponse.Comparison(cmpGw, cmpDist, cmpTerr) : null;
         return new PlanResponse(useTerrain, dataFound, chosenIds, total, covered, links, lost, coveredByDistance,
-                overlapped, cmp, footprints, warnings, (System.nanoTime() - t0) / 1_000_000, lostDetails);
+                overlapped, cmp, footprints, warnings, (System.nanoTime() - t0) / 1_000_000, lostDetails, activeClutter != null);
     }
 
     /**
@@ -230,6 +238,10 @@ public final class PlanningEngine {
      * ao redor deles e escolhe, de forma gulosa, os que recuperam mais ativos.
      */
     public static List<PlanResponse.PeakSuggestion> suggestPeaks(PlanRequest req, TerrainProvider terrain, double fadeMarginDb) {
+        return suggestPeaks(req, terrain, null, fadeMarginDb);
+    }
+
+    public static List<PlanResponse.PeakSuggestion> suggestPeaks(PlanRequest req, TerrainProvider terrain, ClutterProvider clutter, double fadeMarginDb) {
         List<PlanResponse.PeakSuggestion> out = new ArrayList<>();
         RadioParams p = new RadioParams();
         p.txPowerDbm = req.txPowerDbm;
@@ -238,7 +250,7 @@ public final class PlanningEngine {
         p.gatewayHeightM = Math.min(100, Math.max(1, req.gatewayHeightM));
         p.useTerrain = true;
         p.validate();
-        PropagationModel model = new TerrainDiffractionModel(terrain);
+        PropagationModel model = new TerrainDiffractionModel(terrain, req.useClutter ? clutter : null);
         double budget = p.linkBudgetDb();
         int seq = 0;
         for (PlanRequest.Group grp : req.groups) {
@@ -246,8 +258,9 @@ public final class PlanningEngine {
             PlanRequest one = new PlanRequest();
             one.rangeKm = req.rangeKm; one.txPowerDbm = req.txPowerDbm; one.minCoverageTarget = req.minCoverageTarget;
             one.maxGateways = req.maxGateways; one.gatewayHeightM = req.gatewayHeightM; one.useTerrain = true;
+            one.useClutter = req.useClutter;
             one.groups = List.of(grp);
-            PlanResponse r = run(one, terrain, fadeMarginDb);
+            PlanResponse r = run(one, terrain, clutter, List.of(), fadeMarginDb);
             if (!r.terrainUsed() || r.lostToTerrainAssetIds().isEmpty()) continue;
             java.util.Set<String> lostIds = new java.util.HashSet<>(r.lostToTerrainAssetIds());
             List<GeoSite> lost = new ArrayList<>();
