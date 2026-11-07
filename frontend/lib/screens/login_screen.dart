@@ -48,7 +48,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final form = Card(
       child: Padding(
-        padding: const EdgeInsets.all(28),
+        padding: const EdgeInsets.all(22),
         child: Form(
           key: _formKey,
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -104,19 +104,29 @@ class _LoginScreenState extends State<LoginScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
+      // Rolável: com o teclado aberto (celular ou tablet) a tela rola em
+      // vez de estourar a altura ("bottom overflowed").
       body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 900),
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: LayoutBuilder(builder: (context, cts) {
-                if (cts.maxWidth > 640) return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [Expanded(child: brand), const SizedBox(width: 48), Expanded(child: form)]);
-                return Column(mainAxisSize: MainAxisSize.min, children: [brand, const SizedBox(height: 36), form]);
-              }),
+        child: LayoutBuilder(builder: (context, outer) {
+          return SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: outer.maxHeight),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 900),
+                  child: Padding(
+                    padding: EdgeInsets.all(outer.maxWidth < 400 ? 16 : 24),
+                    child: LayoutBuilder(builder: (context, cts) {
+                      if (cts.maxWidth > 640) return Row(crossAxisAlignment: CrossAxisAlignment.center, children: [Expanded(child: brand), const SizedBox(width: 48), Expanded(child: form)]);
+                      return Column(mainAxisSize: MainAxisSize.min, children: [brand, const SizedBox(height: 28), form]);
+                    }),
+                  ),
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        }),
       ),
     );
   }
