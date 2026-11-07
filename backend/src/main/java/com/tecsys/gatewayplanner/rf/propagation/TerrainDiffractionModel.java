@@ -2,6 +2,7 @@ package com.tecsys.gatewayplanner.rf.propagation;
 
 import com.tecsys.gatewayplanner.rf.Geo;
 import com.tecsys.gatewayplanner.rf.RadioParams;
+import com.tecsys.gatewayplanner.rf.clutter.ClutterProvider;
 import com.tecsys.gatewayplanner.rf.terrain.TerrainProvider;
 
 /**
@@ -17,8 +18,11 @@ import com.tecsys.gatewayplanner.rf.terrain.TerrainProvider;
  *   lado dele (no máximo 3 gumes), com a zona de Fresnel considerada via o
  *   parâmetro v. Se a primeira zona de Fresnel está livre, a difração é ~0 dB.
  *
+ * Árvores e prédios (opcional, {@link ClutterProvider}): a altura do obstáculo é somada ao terreno
+ * em cada amostra do perfil, e a difração trata copas e prédios como mais um gume de faca.
+ *
  * Limitações (por isso é o "nível 1" e não o Longley-Rice do Radio Mobile):
- * não modela vegetação, prédios nem reflexão no solo; o DEM mostra o terreno,
+ * não modela reflexão no solo; sem o {@link ClutterProvider} o DEM mostra só o terreno,
  * não as construções. Use {@link RadioParams#fadeMarginDb} para reservar uma
  * margem para isso, e calibre comparando alguns enlaces com o Radio Mobile.
  */
@@ -40,10 +44,25 @@ public final class TerrainDiffractionModel implements PropagationModel {
      */
     private static final double MIN_EDGE_SEPARATION_M = 100;
 
+    /** Perto das antenas o obstáculo é ignorado: o gateway fica em poste/torre e o ativo na própria rede. */
+    private static final double CLUTTER_END_BUFFER_M = 40;
+
     private final TerrainProvider terrain;
+    private final ClutterProvider clutter; // árvores e prédios; null = sem obstáculos
 
     public TerrainDiffractionModel(TerrainProvider terrain) {
+        this(terrain, null);
+    }
+
+    public TerrainDiffractionModel(TerrainProvider terrain, ClutterProvider clutter) {
         this.terrain = terrain;
+        this.clutter = clutter;
+    }
+
+    /** Altura de árvore/prédio no ponto do perfil, ou 0 (sem dado, ou perto demais de uma das pontas). */
+    private double clutterM(double lat, double lon, double xM, double dM) {
+        if (clutter == null || xM < CLUTTER_END_BUFFER_M || dM - xM < CLUTTER_END_BUFFER_M) return 0;
+        return clutter.heightM(lat, lon);
     }
 
     @Override
@@ -76,11 +95,12 @@ public final class TerrainDiffractionModel implements PropagationModel {
             double last = e0;
             for (int i = 1; i < nc; i++) {
                 double f = (double) i / nc;
-                double e = terrain.elevationFastM(txLat + (rxLat - txLat) * f, txLon + (rxLon - txLon) * f);
+                double la = txLat + (rxLat - txLat) * f, lo = txLon + (rxLon - txLon) * f;
+                double e = terrain.elevationFastM(la, lo);
                 if (Double.isNaN(e)) e = last;
                 else last = e;
                 xc[i] = dM * f;
-                yc[i] = e + xc[i] * (dM - xc[i]) / (2 * K_FACTOR * EARTH_RADIUS_M);
+                yc[i] = e + clutterM(la, lo, xc[i], dM) + xc[i] * (dM - xc[i]) / (2 * K_FACTOR * EARTH_RADIUS_M);
             }
             xc[0] = 0;
             yc[0] = e0 + p.gatewayHeightM;
@@ -96,7 +116,8 @@ public final class TerrainDiffractionModel implements PropagationModel {
         double lastValid = e0;
         for (int i = 1; i < n; i++) {
             double f = (double) i / n;
-            double e = terrain.elevationFastM(txLat + (rxLat - txLat) * f, txLon + (rxLon - txLon) * f);
+            double la = txLat + (rxLat - txLat) * f, lo = txLon + (rxLon - txLon) * f;
+            double e = terrain.elevationFastM(la, lo);
             if (Double.isNaN(e)) {
                 missing++;
                 e = lastValid;
@@ -104,7 +125,7 @@ public final class TerrainDiffractionModel implements PropagationModel {
                 lastValid = e;
             }
             x[i] = dM * f;
-            y[i] = e + x[i] * (dM - x[i]) / (2 * K_FACTOR * EARTH_RADIUS_M);
+            y[i] = e + clutterM(la, lo, x[i], dM) + x[i] * (dM - x[i]) / (2 * K_FACTOR * EARTH_RADIUS_M);
         }
         if (missing > (n - 1) / 2) {
             return new LinkResult(fspl, dKm, true, 0);
