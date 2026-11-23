@@ -72,7 +72,7 @@ O `gridsight_dados.py` já deixa essa pasta pré-carregada; o que faltar, o back
 Depois de atualizar o código, rode `flutter pub get` (novas dependências: `pdf` e `printing`).
 
 
-## Novidades (v4)
+## Novidades 
 
 - **Cidade e bairro** de qualquer ativo, candidato ou gateway: a cidade vem na hora da lista dos 5.570 municípios do IBGE (`frontend/assets/data/municipios.csv`, aproximada); o bairro vem do OpenStreetMap ao tocar (ou do cadastro da distribuidora).
 - **Transformar ativo em gateway**: toque no ativo e use "Transformar em gateway" (funciona também com o mapa afastado).
