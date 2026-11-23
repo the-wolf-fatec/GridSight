@@ -123,8 +123,8 @@ public final class PlanningEngine {
         boolean dataFound = !useTerrain || terrainDataPresent(req, terrain);
         List<String> warnings = new ArrayList<>(preWarnings);
         if (useTerrain && !dataFound) {
-            warnings.add("Nenhum arquivo de relevo (.hgt) foi encontrado para esta região. O cálculo usou só a distância. "
-                    + "Confira a pasta 'terrain' (GET /api/planning/terrain-status).");
+            warnings.add("Não há dados de relevo para esta região (o backend tenta baixar sozinho; confira a internet do computador dele). "
+                    + "O cálculo usou só a distância. Situação: GET /api/planning/terrain-status.");
             useTerrain = false;
         }
         ClutterProvider activeClutter = useTerrain && req.useClutter ? clutter : null;

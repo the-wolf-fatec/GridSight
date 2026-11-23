@@ -24,4 +24,9 @@ public interface CandidateSiteRepository extends JpaRepository<CandidateSite, St
     @Query("SELECT c.distribuidora, AVG(c.latitude), AVG(c.longitude) FROM CandidateSite c "
             + "WHERE c.latitude BETWEEN -35 AND 6 AND c.longitude BETWEEN -75 AND -33 GROUP BY c.distribuidora")
     List<Object[]> findCentros();
+
+    // Ladrilhos (1° x 1°) onde há pontos: usado para baixar o relevo em segundo plano ao subir o backend.
+    @Query("SELECT DISTINCT FLOOR(c.latitude), FLOOR(c.longitude) FROM CandidateSite c "
+            + "WHERE c.latitude BETWEEN -35 AND 6 AND c.longitude BETWEEN -75 AND -33")
+    List<Object[]> findTiles();
 }
