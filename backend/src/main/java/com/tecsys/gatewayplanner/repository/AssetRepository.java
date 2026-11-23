@@ -17,4 +17,14 @@ public interface AssetRepository extends JpaRepository<Asset, String> {
     // Usado pelo endpoint GET /api/distribuidoras
     @org.springframework.data.jpa.repository.Query("SELECT DISTINCT a.distribuidora FROM Asset a ORDER BY a.distribuidora")
     List<String> findDistinctDistribuidoras();
+
+    // Centro (média de lat/lon, só pontos dentro do Brasil) dos ativos de cada distribuidora: define a região dela.
+    @org.springframework.data.jpa.repository.Query("SELECT a.distribuidora, AVG(a.latitude), AVG(a.longitude) FROM Asset a "
+            + "WHERE a.latitude BETWEEN -35 AND 6 AND a.longitude BETWEEN -75 AND -33 GROUP BY a.distribuidora")
+    List<Object[]> findCentros();
+
+    // Ladrilhos (1° x 1°) onde há pontos: usado para baixar o relevo em segundo plano ao subir o backend.
+    @org.springframework.data.jpa.repository.Query("SELECT DISTINCT FLOOR(a.latitude), FLOOR(a.longitude) FROM Asset a "
+            + "WHERE a.latitude BETWEEN -35 AND 6 AND a.longitude BETWEEN -75 AND -33")
+    List<Object[]> findTiles();
 }

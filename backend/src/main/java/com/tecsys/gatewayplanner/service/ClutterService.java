@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Árvores e prédios (obstáculos que o relevo SRTM não mostra), vindos do OpenStreetMap via Overpass.
@@ -42,16 +44,24 @@ public class ClutterService implements ClutterProvider {
     private static final String CACHE_VERSION = "v2";
 
     private final Path dir;
-    private final String overpassUrl;
+    private final String[] overpassUrls; // um ou mais servidores (separados por vírgula): se um falhar, tenta o próximo
+    private volatile String lastError = null;
     private final Map<Long, ClutterTile> tiles = new ConcurrentHashMap<>();
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
-    private long lastRequestAt = 0;
+    private volatile long lastRequestAt = 0;
+    /** Baixa os ladrilhos que faltam em segundo plano, um de cada vez, sem segurar o cálculo. */
+    private final ExecutorService background = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "clutter-download");
+        t.setDaemon(true);
+        return t;
+    });
+    private final Set<Long> queued = ConcurrentHashMap.newKeySet();
 
     public ClutterService(@Value("${gridsight.clutter.dir:./clutter}") String dir,
                           @Value("${gridsight.clutter.overpass-url:https://overpass-api.de/api/interpreter}") String overpassUrl) {
         this.dir = Path.of(dir).toAbsolutePath().normalize();
-        this.overpassUrl = overpassUrl;
+        this.overpassUrls = java.util.Arrays.stream(overpassUrl.split(",")).map(String::trim).filter(x -> !x.isEmpty()).toArray(String[]::new);
     }
 
     @Override
@@ -95,10 +105,89 @@ public class ClutterService implements ClutterProvider {
     }
 
     /**
-     * Carrega os ladrilhos ao redor dos ativos e candidatos do pedido.
+     * Teste de ponta a ponta para um ponto: baixa AGORA o trecho de ~5 km que contém (lat, lon) do OpenStreetMap
+     * e diz quanto de mata e de prédios veio, ou o erro exato (sem internet, bloqueio, servidor ocupado...).
+     */
+    public Map<String, Object> test(double lat, double lon) {
+        int i = ClutterTile.tileIndex(lat), j = ClutterTile.tileIndex(lon);
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("trecho", i + "," + j);
+        long t0 = System.currentTimeMillis();
+        try {
+            ClutterTile t = download(i, j);
+            writeCache(t);
+            tiles.put(ClutterTile.key(i, j), t);
+            failedAt.remove(ClutterTile.key(i, j));
+            int trees = 0, buildings = 0;
+            double s = i * ClutterTile.TILE_DEG, w = j * ClutterTile.TILE_DEG;
+            for (int a = 0; a < ClutterTile.N; a++) {
+                for (int b = 0; b < ClutterTile.N; b++) {
+                    int k = t.kindAt(s + (a + 0.5) * ClutterTile.CELL_DEG, w + (b + 0.5) * ClutterTile.CELL_DEG);
+                    if (k == 1) trees++;
+                    else if (k == 2) buildings++;
+                }
+            }
+            m.put("ok", true);
+            m.put("celulasDeMata", trees);
+            m.put("celulasDePredios", buildings);
+            m.put("segundos", (System.currentTimeMillis() - t0) / 1000.0);
+            m.put("mensagem", trees + buildings == 0
+                    ? "Baixou, mas nao ha mata nem predios mapeados neste trecho. Teste outro ponto (ex.: centro de uma cidade)."
+                    : "Funcionou. Ligue 'Arvores e predios' no mapa e aproxime o zoom (12 ou mais).");
+        } catch (Exception e) {
+            lastError = e.toString();
+            m.put("ok", false);
+            m.put("erro", e.toString());
+            m.put("segundos", (System.currentTimeMillis() - t0) / 1000.0);
+            m.put("mensagem", "Nao consegui baixar do OpenStreetMap. Confira a internet/firewall do computador onde o backend roda.");
+        }
+        return m;
+    }
+
+    /** Situação dos downloads de árvores e prédios (para o app mostrar o que está acontecendo). */
+    public Map<String, Object> status() {
+        long now = System.currentTimeMillis();
+        long failed = failedAt.values().stream().filter(t -> now - t < 600_000).count();
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("tilesLoaded", tiles.size());
+        m.put("downloading", queued.size());
+        m.put("failed", failed);
+        m.put("lastError", lastError);
+        m.put("cacheDir", dir.toString());
+        m.put("servers", overpassUrls.length);
+        return m;
+    }
+
+    /**
+     * Versão sem espera de {@link #ensureArea}: usa o que já está em memória ou no disco e manda baixar o resto
+     * em segundo plano. Assim o desenho do mapa nunca fica preso esperando o OpenStreetMap.
+     * @return quantos trechos da área ainda estão faltando (sendo baixados)
+     */
+    public int ensureAreaAsync(double minLat, double minLon, double maxLat, double maxLon) {
+        int pending = 0;
+        for (int i = ClutterTile.tileIndex(minLat); i <= ClutterTile.tileIndex(maxLat); i++) {
+            for (int j = ClutterTile.tileIndex(minLon); j <= ClutterTile.tileIndex(maxLon); j++) {
+                long key = ClutterTile.key(i, j);
+                if (tiles.containsKey(key)) continue;
+                ClutterTile t = readCache(i, j);
+                if (t != null) {
+                    tiles.put(key, t);
+                    continue;
+                }
+                pending++;
+                queueDownload(i, j, key);
+            }
+        }
+        return pending;
+    }
+
+    /**
+     * Prepara os ladrilhos ao redor dos ativos e candidatos do pedido SEM esperar downloads:
+     * usa o que já está em memória ou no disco; o que falta é baixado em segundo plano
+     * (uma próxima otimização já os encontra). Assim o cálculo nunca trava esperando o OpenStreetMap.
      * @return true se há dado de obstáculos para pelo menos parte da região
      */
-    public synchronized boolean prepare(PlanRequest req, List<String> warnings) {
+    public boolean prepare(PlanRequest req, List<String> warnings) {
         Set<Long> wanted = new LinkedHashSet<>();
         List<int[]> order = new java.util.ArrayList<>();
         for (PlanRequest.Group g : req.groups) {
@@ -107,8 +196,7 @@ public class ClutterService implements ClutterProvider {
         }
         if (order.isEmpty()) return false;
         boolean truncated = order.size() > MAX_TILES;
-        int failed = 0, ok = 0;
-        String firstError = null;
+        int ok = 0, pending = 0;
         for (int k = 0; k < Math.min(MAX_TILES, order.size()); k++) {
             int[] ij = order.get(k);
             long key = ClutterTile.key(ij[0], ij[1]);
@@ -116,28 +204,46 @@ public class ClutterService implements ClutterProvider {
                 ok++;
                 continue;
             }
-            try {
-                ClutterTile t = readCache(ij[0], ij[1]);
-                if (t == null) {
-                    t = download(ij[0], ij[1]);
-                    writeCache(t);
-                }
+            ClutterTile t = readCache(ij[0], ij[1]);
+            if (t != null) {
                 tiles.put(key, t);
                 ok++;
-            } catch (Exception e) {
-                failed++;
-                if (firstError == null) firstError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-                log.warn("Obstáculos: falha no ladrilho {},{}: {}", ij[0], ij[1], e.toString());
+                continue;
             }
+            pending++;
+            queueDownload(ij[0], ij[1], key);
         }
-        if (failed > 0) {
-            warnings.add("Não consegui baixar árvores e prédios (OpenStreetMap) de " + failed + " trecho(s) da região (" + firstError
-                    + "). Nessas partes o cálculo ficou sem esses obstáculos; tente de novo mais tarde.");
+        if (pending > 0) {
+            warnings.add("Árvores e prédios: " + pending + " trecho(s) de ~5 km ainda não estavam salvos e estão sendo baixados em segundo plano. "
+                    + "Este cálculo usou só o que já havia; rode de novo depois de alguns minutos para incluí-los.");
         }
         if (truncated) {
             warnings.add("A região é grande: árvores e prédios foram considerados só em parte dela (limite de " + MAX_TILES + " trechos de ~5 km).");
         }
         return ok > 0;
+    }
+
+    private void queueDownload(int i, int j, long key) {
+        Long f = failedAt.get(key);
+        if (f != null && System.currentTimeMillis() - f < 600_000) return;
+        if (!queued.add(key)) return;
+        background.submit(() -> {
+            try {
+                if (tiles.containsKey(key)) return;
+                ClutterTile t = readCache(i, j);
+                if (t == null) {
+                    t = download(i, j);
+                    writeCache(t);
+                }
+                tiles.put(key, t);
+            } catch (Exception e) {
+                failedAt.put(key, System.currentTimeMillis());
+                lastError = e.toString();
+                log.warn("Obstáculos (segundo plano): falha no ladrilho {},{}: {}", i, j, e.toString());
+            } finally {
+                queued.remove(key);
+            }
+        });
     }
 
     /** Ladrilho do ponto e os 8 vizinhos (os enlaces atravessam ladrilhos ao lado). */
@@ -191,6 +297,18 @@ public class ClutterService implements ClutterProvider {
     }
 
     private JsonNode query(String ql) throws Exception {
+        Exception last = null;
+        for (String url : overpassUrls) {
+            try {
+                return queryOne(url, ql);
+            } catch (Exception e) {
+                last = e;
+            }
+        }
+        throw last == null ? new IllegalStateException("Nenhum servidor Overpass configurado") : last;
+    }
+
+    private JsonNode queryOne(String overpassUrl, String ql) throws Exception {
         long wait = 1500 - (System.currentTimeMillis() - lastRequestAt); // educação com o servidor público
         if (wait > 0) Thread.sleep(wait);
         HttpRequest rq = HttpRequest.newBuilder(URI.create(overpassUrl))

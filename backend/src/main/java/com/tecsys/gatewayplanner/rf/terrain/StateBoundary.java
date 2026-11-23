@@ -14,7 +14,7 @@ import java.util.List;
  * a camada de relevo no formato do estado. Formato do arquivo: uma linha por anel,
  * "lon,lat lon,lat ...".
  */
-public final class StateBoundary {
+public final class StateBoundary implements TileClip {
 
     private final List<double[]> rings = new ArrayList<>(); // cada anel: lon0,lat0,lon1,lat1,...
 
@@ -65,6 +65,7 @@ public final class StateBoundary {
     }
 
     /** O contorno em coordenadas de pixel de um tile (Web Mercator), para usar como recorte. */
+    @Override
     public Path2D tileShape(int z, int tx, int ty) {
         double n = 1 << z;
         Path2D.Double path = new Path2D.Double(Path2D.WIND_NON_ZERO);

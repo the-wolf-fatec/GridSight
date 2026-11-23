@@ -19,6 +19,10 @@ public class AssetService {
         return repository.findByDistribuidora(distribuidora);
     }
 
+    public List<Object[]> findCentros() {
+        return repository.findCentros();
+    }
+
     public List<String> findDistribuidoras() {
         return repository.findDistinctDistribuidoras();
     }

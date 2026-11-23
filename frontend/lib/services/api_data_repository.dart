@@ -23,6 +23,14 @@ class ApiDataRepository implements DataRepository {
   }
 
   @override
+  Future<Map<String, List<double>>> fetchCentros() async {
+    final m = await _request('GET', '/distribuidoras/centros') as Map;
+    return {
+      for (final e in m.entries) e.key.toString(): [for (final v in (e.value as List)) (v as num).toDouble()],
+    };
+  }
+
+  @override
   Future<List<Asset>> fetchAssets(String distribuidora) async {
     final list = await _request('GET', '/assets', query: {'distribuidora': distribuidora}) as List;
     return list.map((j) => _assetFromJson(j)).toList();

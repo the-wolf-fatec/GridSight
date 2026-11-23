@@ -44,6 +44,51 @@ public final class PlanningEngine {
     private PlanningEngine() {
     }
 
+    /** Teto de pares (candidato, ativo) avaliados com relevo por grupo: mantém a otimização em segundos. */
+    static final long TERRAIN_PAIR_BUDGET = 400_000;
+
+    /**
+     * Reduz os candidatos: descarta os que não alcançam nenhum ativo, mantém o melhor de cada célula
+     * (~alcance/6) e, se ainda passar do orçamento de pares, fica com os que cobrem mais.
+     * Candidatos de {@code keepIds} (gateways manuais) nunca saem. Sem {@code keepIds}, mantém a ordem original.
+     */
+    static List<GeoSite> thinCandidates(List<GeoSite> cands, CoverageMatrix flat, double rangeKm, long pairBudget,
+                                        java.util.Set<String> keepIds) {
+        int n = cands.size();
+        if (!keepIds.isEmpty()) {
+            List<GeoSite> only = new ArrayList<>();
+            for (GeoSite c : cands) if (keepIds.contains(c.id())) only.add(c);
+            if (!only.isEmpty()) return only; // manual: só os escolhidos entram no cálculo
+        }
+        long total = 0;
+        for (int c = 0; c < n; c++) total += flat.coveredAssets(c).length;
+        if (total <= pairBudget) return cands;
+
+        double cell = Math.max(0.3, rangeKm / 6.0) / 111.195;
+        java.util.Map<Long, Integer> bestInCell = new java.util.HashMap<>();
+        for (int c = 0; c < n; c++) {
+            int cnt = flat.coveredAssets(c).length;
+            if (cnt == 0) continue;
+            GeoSite g = cands.get(c);
+            long key = (((long) Math.floor(g.lat() / cell)) << 32) ^ (((long) Math.floor(g.lon() / cell)) & 0xFFFFFFFFL);
+            Integer cur = bestInCell.get(key);
+            if (cur == null || cnt > flat.coveredAssets(cur).length) bestInCell.put(key, c);
+        }
+        List<Integer> order = new ArrayList<>(bestInCell.values());
+        order.sort((a, b) -> Integer.compare(flat.coveredAssets(b).length, flat.coveredAssets(a).length));
+        java.util.Set<Integer> chosen = new java.util.HashSet<>();
+        long used = 0;
+        for (int c : order) {
+            int cnt = flat.coveredAssets(c).length;
+            if (used + cnt > pairBudget && !chosen.isEmpty()) continue;
+            chosen.add(c);
+            used += cnt;
+        }
+        List<GeoSite> out = new ArrayList<>();
+        for (int c = 0; c < n; c++) if (chosen.contains(c)) out.add(cands.get(c));
+        return out;
+    }
+
     /** Margem pedida pelo app (0..20 dB) ou, se não veio, a padrão do servidor. */
     private static double effectiveMargin(PlanRequest req, double serverDefault) {
         double m = req.fadeMarginDb != null ? req.fadeMarginDb : serverDefault;
@@ -78,8 +123,8 @@ public final class PlanningEngine {
         boolean dataFound = !useTerrain || terrainDataPresent(req, terrain);
         List<String> warnings = new ArrayList<>(preWarnings);
         if (useTerrain && !dataFound) {
-            warnings.add("Nenhum arquivo de relevo (.hgt) foi encontrado para esta região. O cálculo usou só a distância. "
-                    + "Confira a pasta 'terrain' (GET /api/planning/terrain-status).");
+            warnings.add("Não há dados de relevo para esta região (o backend tenta baixar sozinho; confira a internet do computador dele). "
+                    + "O cálculo usou só a distância. Situação: GET /api/planning/terrain-status.");
             useTerrain = false;
         }
         ClutterProvider activeClutter = useTerrain && req.useClutter ? clutter : null;
@@ -89,6 +134,7 @@ public final class PlanningEngine {
         List<String> lost = new ArrayList<>();
         List<PlanResponse.LostAsset> lostDetails = new ArrayList<>();
         List<PlanResponse.Footprint> footprints = new ArrayList<>();
+        List<PlanResponse.Dependency> dependencies = new ArrayList<>();
         int total = 0, covered = 0, coveredByDistance = 0, overlapped = 0;
         int cmpGw = 0, cmpDist = 0, cmpTerr = 0;
         boolean anyComparison = false;
@@ -102,11 +148,31 @@ public final class PlanningEngine {
             if (cands.isEmpty()) continue;
 
             boolean manual = grp.manualGatewayIds != null;
+            if (manual) {
+                // Ajuste manual: só importam os gateways marcados. Ignorar os outros milhares de candidatos
+                // faz o recálculo levar segundos em vez de minutos.
+                java.util.Set<String> wanted = new java.util.HashSet<>(grp.manualGatewayIds);
+                List<GeoSite> only = new ArrayList<>();
+                for (GeoSite c : cands) if (wanted.contains(c.id())) only.add(c);
+                cands = only;
+                if (cands.isEmpty()) continue;
+            }
             OptimizerConstraints oc = new OptimizerConstraints();
             oc.maxGateways = Math.max(1, req.maxGateways);
             oc.minCoverageTarget = Math.min(1.0, Math.max(0.0, req.minCoverageTarget));
 
             CoverageMatrix flatM = CoverageCalculator.compute(cands, assets, distanceOnly, new FreeSpaceModel());
+            if (useTerrain) {
+                // Com milhares de candidatos o cálculo de relevo (par a par) leva minutos. Fica só com os mais úteis.
+                List<GeoSite> kept = thinCandidates(cands, flatM, withTerrain.maxRangeKm, TERRAIN_PAIR_BUDGET,
+                        manual ? new java.util.HashSet<>(grp.manualGatewayIds) : java.util.Set.of());
+                if (kept.size() < cands.size()) {
+                    warnings.add("Para manter o cálculo rápido, " + (grp.name == null ? "um grupo" : grp.name) + " usou " + kept.size()
+                            + " dos " + cands.size() + " locais candidatos (os mais úteis em cada área).");
+                    cands = kept;
+                    flatM = CoverageCalculator.compute(cands, assets, distanceOnly, new FreeSpaceModel());
+                }
+            }
             CoverageMatrix mainM = flatM;
             RadioParams mainP = distanceOnly;
             PropagationModel model = new FreeSpaceModel();
@@ -167,6 +233,12 @@ public final class PlanningEngine {
                 for (int a : mainM.coveredAssets(g)) reach[a]++;
             }
             for (int r : reach) if (r >= 2) overlapped++;
+            // Redundância: ativos que só um gateway alcança (se ele cair, ficam sem sinal).
+            for (int g : sol.gateways) {
+                List<String> only = new ArrayList<>();
+                for (int a : mainM.coveredAssets(g)) if (reach[a] == 1) only.add(assets.get(a).id());
+                dependencies.add(new PlanResponse.Dependency(cands.get(g).id(), only));
+            }
 
             for (int a = 0; a < assets.size(); a++) {
                 int g = sol.servingGateway[a];
@@ -180,11 +252,16 @@ public final class PlanningEngine {
                 List<GeoSite> chosen = new ArrayList<>();
                 for (int g : sol.gateways) chosen.add(cands.get(g));
                 java.util.Map<Long, List<GeoSite>> grid = assetGrid(assets);
-                for (int k = 0; k < chosen.size(); k++) {
-                    PlanResponse.Footprint fp = footprint(chosen.get(k), mainP, model, terrain);
-                    footprints.add(new PlanResponse.Footprint(fp.gatewayId(), fp.points(), fp.obstacles(),
-                            shadows(chosen, k, mainP, model, grid)));
-                }
+                // Cada gateway é independente dos outros: calcula em paralelo (usa todos os núcleos do computador).
+                final RadioParams fp0 = mainP;
+                final PropagationModel fm = model;
+                PlanResponse.Footprint[] done = new PlanResponse.Footprint[chosen.size()];
+                java.util.stream.IntStream.range(0, chosen.size()).parallel().forEach(k -> {
+                    PlanResponse.Footprint fp = footprint(chosen.get(k), fp0, fm, terrain);
+                    done[k] = new PlanResponse.Footprint(fp.gatewayId(), fp.points(), fp.obstacles(),
+                            shadows(chosen, k, fp0, fm, grid));
+                });
+                footprints.addAll(java.util.Arrays.asList(done));
             }
         }
 
@@ -194,7 +271,7 @@ public final class PlanningEngine {
 
         PlanResponse.Comparison cmp = anyComparison ? new PlanResponse.Comparison(cmpGw, cmpDist, cmpTerr) : null;
         return new PlanResponse(useTerrain, dataFound, chosenIds, total, covered, links, lost, coveredByDistance,
-                overlapped, cmp, footprints, warnings, (System.nanoTime() - t0) / 1_000_000, lostDetails, activeClutter != null);
+                overlapped, cmp, footprints, warnings, (System.nanoTime() - t0) / 1_000_000, lostDetails, activeClutter != null, dependencies);
     }
 
     /**

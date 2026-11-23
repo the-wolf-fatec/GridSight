@@ -103,6 +103,8 @@ class TerrainAnalysis {
   final Map<String, List<TerrainObstacle>> obstacles; // gatewayId -> morros que bloqueiam o sinal (do mais alto ao mais baixo)
   final List<String> warnings;
   final bool clutterUsed; // árvores e prédios entraram no cálculo
+  /// Redundância: gatewayId -> ativos que SÓ ele atende (ficam sem sinal se ele cair).
+  final Map<String, Set<String>> dependencies;
   final int totalAssets;
   final int coveredAssets;
   final int elapsedMs;
@@ -121,12 +123,35 @@ class TerrainAnalysis {
     this.lostInfo = const {},
     required this.warnings,
     this.clutterUsed = false,
+    this.dependencies = const {},
     required this.totalAssets,
     required this.coveredAssets,
     required this.elapsedMs,
   });
 
   bool isCovered(String assetId) => linkByAsset.containsKey(assetId);
+
+  /// Ativos atendidos por um único gateway (sem reserva).
+  static final Expando<Set<String>> _singleCache = Expando<Set<String>>();
+  Set<String> get singlePointAssetIds {
+    final cached = _singleCache[this];
+    if (cached != null) return cached;
+    final all = <String>{};
+    for (final s in dependencies.values) {
+      all.addAll(s);
+    }
+    _singleCache[this] = all;
+    return all;
+  }
+
+  /// Ativo coberto por 2 ou mais gateways: continua com sinal se um deles cair.
+  bool isProtected(String assetId) => isCovered(assetId) && !singlePointAssetIds.contains(assetId);
+
+  /// Quantos ativos ficam sem sinal se [gatewayId] falhar.
+  int dependentsOf(String gatewayId) => dependencies[gatewayId]?.length ?? 0;
+
+  int get singlePointCount => singlePointAssetIds.length;
+  int get protectedCount => coveredAssets - singlePointCount < 0 ? 0 : coveredAssets - singlePointCount;
 
   /// Ativos atendidos por um gateway, do sinal mais forte ao mais fraco.
   List<AssetLink> linksOf(String gatewayId) {
@@ -169,6 +194,10 @@ class TerrainAnalysis {
       },
       warnings: (j['warnings'] as List).map((e) => e.toString()).toList(),
       clutterUsed: (j['clutterUsed'] as bool?) ?? false,
+      dependencies: {
+        for (final d in ((j['dependencies'] as List?) ?? const []))
+          (d['gatewayId'].toString()): {for (final id in ((d['exclusiveAssetIds'] as List?) ?? const [])) id.toString()},
+      },
       totalAssets: j['totalAssets'] as int,
       coveredAssets: j['coveredAssets'] as int,
       elapsedMs: (j['elapsedMs'] as num).toInt(),

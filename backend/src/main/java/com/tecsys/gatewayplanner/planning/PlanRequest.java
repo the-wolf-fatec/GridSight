@@ -30,7 +30,7 @@ public class PlanRequest {
     /** true = considera o relevo (SRTM); false = só distância. */
     public boolean useTerrain = true;
     /** true = considera árvores e prédios (OpenStreetMap) além do relevo; só vale com useTerrain. */
-    public boolean useClutter = true;
+    public boolean useClutter = false;
     /** Um grupo por distribuidora: cada uma só usa os próprios locais candidatos. */
     public List<Group> groups = new ArrayList<>();
 
