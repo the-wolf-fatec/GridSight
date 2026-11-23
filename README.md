@@ -1,3 +1,13 @@
+
+<p align="center">
+  <img
+    src="gridsight.png"
+    alt="GridSight"
+    width="100%"
+  />
+</p>
+
+
 # GridSight — planejamento de gateways com relevo
 
 Importação por distribuidora (caixas de seleção), criação manual de ativos e candidatos, mapa OpenStreetMap,
