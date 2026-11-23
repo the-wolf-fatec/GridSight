@@ -134,25 +134,6 @@ class ParametersScreen extends StatelessWidget {
                 ),
               ),
             ),
-            if (p.useTerrain) ...[
-              const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-                  child: SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    secondary: const Icon(Icons.forest_outlined, size: 18, color: AppColors.coverage),
-                    title: const Text('Árvores e prédios', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-                    subtitle: const Text(
-                      'Usa matas e construções do OpenStreetMap (com altura) como obstáculos. Na primeira vez baixa os dados da região; depois fica salvo.',
-                      style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                    ),
-                    value: p.useClutter,
-                    onChanged: (v) => update(p.copyWith(useClutter: v)),
-                  ),
-                ),
-              ),
-            ],
             if (p.useTerrain) _TerrainWarning(app: app),
           ],
         );
@@ -243,7 +224,7 @@ class _TerrainWarning extends StatelessWidget {
     final backendOn = app.planningApi != null;
     if (!backendOn || (st != null && st.ok)) return const SizedBox.shrink();
 
-    final msg = st == null ? 'Relevo indisponível: o backend não respondeu.' : 'Relevo não encontrado na pasta backend/terrain.';
+    final msg = st == null ? 'Relevo indisponível: o backend não respondeu.' : 'Relevo não encontrado. O backend procurou em: ${st.directory.isEmpty ? 'backend/terrain' : st.directory}. Copie os arquivos .hgt para a pasta C:\\Users\\SEU_USUARIO\\gridsight-terrain (ou defina gridsight.terrain.dir) e clique em atualizar.';
     const color = AppColors.alert;
     return Container(
       margin: const EdgeInsets.only(top: 16),

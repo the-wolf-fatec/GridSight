@@ -9,8 +9,8 @@ import java.io.IOException;
 
 /**
  * Desenha os tiles de RELEVO (sombreado + cor por altitude) a partir dos mesmos dados
- * usados no cálculo de cobertura, recortados pelo contorno do estado: fora dele o tile
- * fica transparente (sem os "quadradinhos" de 1 grau dos arquivos .hgt).
+ * usados no cálculo de cobertura, recortados pelo contorno do estado OU pela região escolhida
+ * (distribuidoras selecionadas): fora dela o tile fica transparente (sem os "quadradinhos" de 1 grau dos arquivos .hgt).
  * Não depende do Spring.
  */
 public final class TerrainTileRenderer {
@@ -22,7 +22,7 @@ public final class TerrainTileRenderer {
     }
 
     /** PNG 256x256 com transparência. {@code boundary} nulo = não recorta. */
-    public static byte[] png(TerrainProvider terrain, StateBoundary boundary, int z, int x, int y) throws IOException {
+    public static byte[] png(TerrainProvider terrain, TileClip boundary, int z, int x, int y) throws IOException {
         BufferedImage out = new BufferedImage(SIZE, SIZE, BufferedImage.TYPE_INT_ARGB);
         int n = 1 << Math.max(0, Math.min(z, 22));
         if (z >= MIN_ZOOM && x >= 0 && y >= 0 && x < n && y < n) {
@@ -80,7 +80,7 @@ public final class TerrainTileRenderer {
 
                 int[] base = hypsometric(e);
                 int r8 = clamp(base[0] * (1 + k)), g8 = clamp(base[1] * (1 + k)), b8 = clamp(base[2] * (1 + k));
-                int a = clamp(95 + Math.abs(k) * 110);                              // relevo acentuado fica mais opaco
+                int a = clamp(120 + Math.abs(k) * 100);                              // relevo acentuado fica mais opaco
                 img.setRGB(i - 1, j - 1, (a << 24) | (r8 << 16) | (g8 << 8) | b8);
             }
         }

@@ -26,7 +26,16 @@ public record PlanResponse(
         /** Para cada ativo sem sinal por causa do relevo: altitude do local e o morro que bloqueia. */
         List<LostAsset> lostDetails,
         /** Árvores e prédios entraram no cálculo? */
-        boolean clutterUsed) {
+        boolean clutterUsed,
+        /**
+         * Redundância: para cada gateway escolhido, os ativos que SÓ ELE atende. Se esse gateway cair,
+         * esses ativos ficam sem sinal. Os demais ativos cobertos têm 2 ou mais gateways (protegidos).
+         */
+        List<Dependency> dependencies) {
+
+    /** Ativos que dependem de um único gateway (ficam sem sinal se ele falhar). */
+    public record Dependency(String gatewayId, List<String> exclusiveAssetIds) {
+    }
 
     /**
      * @param gatewayId   gateway de referência (o mais próximo ao alcance)

@@ -21,7 +21,7 @@ class CoverageParams {
     this.minCoverageTarget = 1.0,
     this.maxGateways = 12,
     this.useTerrain = true,
-    this.useClutter = true,
+    this.useClutter = false,
     this.gatewayHeightM = 6,
     this.fadeMarginDb = 0,
   });

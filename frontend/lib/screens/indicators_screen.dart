@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
+import '../models/scenario_result.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
 import '../widgets/kpi_card.dart';
+import '../widgets/pdf_button.dart';
 import '../widgets/section_title.dart';
 
 class IndicatorsScreen extends StatelessWidget {
@@ -12,7 +14,8 @@ class IndicatorsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final result = context.watch<AppState>().currentResult;
+    final app = context.watch<AppState>();
+    final result = app.currentResult;
     if (result == null) return _emptyState();
 
     final covered = result.coveragePercent * 100;
@@ -27,7 +30,7 @@ class IndicatorsScreen extends StatelessWidget {
     return PageBody(
       builder: (context, w) {
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const SectionTitle(title: 'Indicadores de Qualidade'),
+            SectionTitle(title: 'Indicadores de Qualidade', actions: [ScenarioPdfButton(result: result)]),
             ResponsiveGrid(
               children: [for (final (l, v, i, a) in kpis) KpiCard(label: l, value: v, icon: i, accent: a)],
             ),
@@ -57,6 +60,8 @@ class IndicatorsScreen extends StatelessWidget {
               if (c.maxWidth > 760) return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [Expanded(child: donut), const SizedBox(width: 16), Expanded(child: bars)]);
               return Column(children: [donut, const SizedBox(height: 16), bars]);
             }),
+            const SizedBox(height: 16),
+            _RedundancyCard(app: app, result: result),
         ]);
       },
     );
@@ -96,3 +101,59 @@ Widget _emptyState() => const Center(
         ]),
       ),
     );
+
+
+/// Redundância: quantos ativos têm reserva e o que acontece se cada gateway cair.
+class _RedundancyCard extends StatelessWidget {
+  const _RedundancyCard({required this.app, required this.result});
+  final AppState app;
+  final ScenarioResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = result.terrain;
+    if (t == null || result.chosenGateways.isEmpty) {
+      return _chartCard(
+        'Redundância (segurança da rede)',
+        const Text('Disponível quando o cenário é calculado com relevo: o sistema mostra quais ativos ficam sem sinal se um gateway cair.', style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5)),
+      );
+    }
+    final covered = t.coveredAssets;
+    final protectedN = t.protectedCount;
+    final single = t.singlePointCount;
+    final ratio = covered == 0 ? 0.0 : protectedN / covered;
+
+    return _chartCard(
+      'Redundância (segurança da rede)',
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('$protectedN de $covered ativos cobertos têm reserva (2 ou mais gateways). $single dependem de um único gateway.', style: const TextStyle(fontSize: 13, color: AppColors.textPrimary)),
+        const SizedBox(height: 10),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(value: ratio, minHeight: 10, backgroundColor: AppColors.energy.withOpacity(0.35), color: AppColors.coverage),
+        ),
+        const SizedBox(height: 6),
+        Row(children: const [
+          _dotLabel(AppColors.coverage, 'Com reserva'),
+          SizedBox(width: 14),
+          _dotLabel(AppColors.energy, 'Sem reserva'),
+        ]),
+        const SizedBox(height: 14),
+        const Text('Se um gateway cair:', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+        const SizedBox(height: 6),
+        for (final g in result.chosenGateways)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 3),
+            child: Row(children: [
+              Expanded(child: Text(g.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5))),
+              const SizedBox(width: 8),
+              Text(
+                t.dependentsOf(g.id) == 0 ? 'nenhum ativo perde sinal' : '${t.dependentsOf(g.id)} ativo${t.dependentsOf(g.id) == 1 ? '' : 's'} sem sinal',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: t.dependentsOf(g.id) == 0 ? AppColors.coverage : AppColors.alert),
+              ),
+            ]),
+          ),
+      ]),
+    );
+  }
+}

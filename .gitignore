@@ -5,3 +5,14 @@ target/
 *.iml
 *.class
 *.log
+backend/target/
+backend/clutter/
+*.hgt
+frontend/build/
+frontend/.dart_tool/
+frontend/android/local.properties
+__pycache__/
+.idea/
+*.iml
+.env
+*.zip

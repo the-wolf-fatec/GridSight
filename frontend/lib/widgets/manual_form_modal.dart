@@ -140,7 +140,7 @@ class _ManualFormModalState extends State<_ManualFormModal> {
       backgroundColor: AppColors.surface,
       title: Text(widget.title),
       content: SizedBox(
-        width: 380,
+        width: (MediaQuery.of(context).size.width - 80).clamp(240.0, 380.0).toDouble(), // cabe em celular estreito
         child: Form(
           key: _formKey,
           child: Column(

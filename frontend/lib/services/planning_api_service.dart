@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../models/asset.dart';
 import '../models/candidate_site.dart';
 import '../models/coverage_params.dart';
+import '../models/elevation_profile.dart';
 import '../models/terrain_analysis.dart';
 import 'api_data_repository.dart' show ApiException;
 
@@ -40,6 +41,7 @@ class PlanningApiService {
   Future<TerrainAnalysis> run({
     required CoverageParams params,
     required List<PlanningGroup> groups,
+    Duration? timeout,
   }) async {
     final body = {
       'rangeKm': params.effectiveRangeKm,
@@ -52,8 +54,29 @@ class PlanningApiService {
       'useClutter': params.useClutter,
       'groups': [for (final g in groups) g.toJson()],
     };
-    final json = await _request('POST', '/planning/run', body: body);
+    final json = await _request('POST', '/planning/run', body: body, timeout: timeout);
     return TerrainAnalysis.fromJson(json as Map<String, dynamic>);
+  }
+
+  /// Perfil de elevação entre dois pontos (gateway e ativo): chão, linha de visada e Fresnel.
+  Future<ElevationProfile> elevationProfile({
+    required double lat1,
+    required double lon1,
+    required double lat2,
+    required double lon2,
+    double gatewayHeightM = 6,
+    double deviceHeightM = 5,
+  }) async {
+    final q = 'lat1=$lat1&lon1=$lon1&lat2=$lat2&lon2=$lon2&h1=$gatewayHeightM&h2=$deviceHeightM&n=140';
+    final json = await _request('GET', '/planning/profile?$q');
+    return ElevationProfile.fromJson(json as Map<String, dynamic>);
+  }
+
+  /// Registra no backend a região escolhida (pontos da rede das distribuidoras selecionadas);
+  /// devolve um id que vai na URL dos tiles de relevo para pintá-lo SÓ nessa região.
+  Future<String> registerRegion(List<List<double>> points, {double radiusKm = 8}) async {
+    final json = await _request('POST', '/terrain/regions', body: {'points': points, 'radiusKm': radiusKm});
+    return (json as Map<String, dynamic>)['id'].toString();
   }
 
   Future<TerrainStatus> terrainStatus() async {
@@ -61,12 +84,12 @@ class PlanningApiService {
     return TerrainStatus.fromJson(json as Map<String, dynamic>);
   }
 
-  Future<dynamic> _request(String method, String path, {Object? body}) async {
+  Future<dynamic> _request(String method, String path, {Object? body, Duration? timeout}) async {
     final uri = Uri.parse('$baseUrl$path');
     http.Response response;
     try {
       response = method == 'POST'
-          ? await http.post(uri, headers: {'Content-Type': 'application/json'}, body: jsonEncode(body)).timeout(timeout)
+          ? await http.post(uri, headers: {'Content-Type': 'application/json'}, body: jsonEncode(body)).timeout(timeout ?? this.timeout)
           : await http.get(uri).timeout(const Duration(seconds: 8));
     } catch (e) {
       throw ApiException('Não foi possível falar com o backend em $baseUrl ($e). Ele está rodando?');

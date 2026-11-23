@@ -51,6 +51,18 @@ class AppState extends ChangeNotifier {
   String? selectedDistribuidora; // mantido pra criação manual de ativo/candidato (usa a 1ª marcada)
   Set<String> selectedDistribuidoras = {}; // seleção múltipla — permite ver várias juntas no mapa
   bool loadingDistribuidoras = false;
+  Map<String, List<double>> centrosDistribuidoras = {}; // nome -> [lat, lon] do centro dos ativos (define a região)
+
+  /// Marca ou desmarca várias distribuidoras de uma vez (caixa de uma região, "limpar tudo").
+  void setDistribuidorasSelected(Iterable<String> nomes, bool selected) {
+    if (selected) {
+      selectedDistribuidoras.addAll(nomes);
+    } else {
+      selectedDistribuidoras.removeAll(nomes.toList());
+    }
+    selectedDistribuidora = selectedDistribuidoras.isNotEmpty ? selectedDistribuidoras.first : null;
+    notifyListeners();
+  }
 
   void toggleDistribuidoraSelection(String d) {
     if (selectedDistribuidoras.contains(d)) {
@@ -76,6 +88,18 @@ class AppState extends ChangeNotifier {
 
   // --- Parâmetros de cobertura de RF ---
   CoverageParams params = const CoverageParams();
+
+  /// Traz um cenário do histórico de volta como cenário atual (mapa e indicadores).
+  void openScenario(ScenarioResult r) {
+    currentResult = r;
+    notifyListeners();
+  }
+
+  /// Usa os parâmetros de um cenário antigo como ponto de partida para um novo.
+  void reuseScenarioParams(ScenarioResult r) {
+    params = r.params;
+    notifyListeners();
+  }
 
   // --- Otimização ---
   bool running = false;
@@ -106,6 +130,11 @@ class AppState extends ChangeNotifier {
       // As 5 distribuidoras sempre aparecem (mesmo que o banco ainda não tenha todas); o que vier a mais do banco também entra.
       const fixas = ['CPFL Paulista', 'CPFL Piratininga', 'EDP São Paulo', 'Enel São Paulo', 'Neoenergia Elektro'];
       distribuidoras = [...fixas, for (final d in fetched) if (!fixas.contains(d)) d];
+      try {
+        centrosDistribuidoras = await _repository.fetchCentros();
+      } catch (_) {
+        centrosDistribuidoras = {}; // sem o centro, a região sai pelo nome
+      }
       // Não seleciona nenhuma sozinho — com seleção múltipla, quem escolhe é o usuário (checkboxes).
     } catch (e) {
       dataError = e.toString();
@@ -200,11 +229,13 @@ class AppState extends ChangeNotifier {
       final c = candidateSitesByDistribuidora[d] ?? const <CandidateSite>[];
       if (a.isEmpty || c.isEmpty) continue;
       final candidateIds = {for (final x in c) x.id};
+      // Ajuste manual: manda só os gateways marcados (não os milhares de candidatos) — fica muito mais rápido.
+      final picked = gatewayIds == null ? null : gatewayIds.where(candidateIds.contains).toList();
       groups.add(PlanningGroup(
         name: d,
         assets: a,
-        candidates: c,
-        manualGatewayIds: gatewayIds == null ? null : gatewayIds.where(candidateIds.contains).toList(),
+        candidates: picked == null ? c : [for (final x in c) if (gatewayIds!.contains(x.id)) x],
+        manualGatewayIds: picked,
       ));
     }
     return groups;
@@ -249,6 +280,11 @@ class AppState extends ChangeNotifier {
       candidateSites = newCandidates;
       assetsByDistribuidora = newAssetsBy;
       candidateSitesByDistribuidora = newCandidatesBy;
+      // Dados novos: o resultado antigo (gateways de OUTRAS distribuidoras) não vale mais e sumia só da tela de dados.
+      currentResult = null;
+      manualGatewayIds.clear();
+      peakSuggestions = [];
+      peakMessage = null;
       dataImported = true;
     } catch (e) {
       dataError = e.toString();
@@ -256,6 +292,38 @@ class AppState extends ChangeNotifier {
     }
 
     loadingData = false;
+    notifyListeners();
+    if (dataImported) await _syncTerrainRegion();
+  }
+
+  // --- Região do relevo (pintado só onde há rede das distribuidoras escolhidas) ---
+  String? terrainRegionId;
+
+  Future<void> _syncTerrainRegion() async {
+    final api = planningApi;
+    if (api == null) return;
+    final seen = <String>{};
+    final pts = <List<double>>[];
+    void add(double la, double lo) {
+      if (seen.add('${(la / 0.02).floor()}_${(lo / 0.02).floor()}')) pts.add([la, lo]);
+    }
+
+    for (final a in assets) {
+      add(a.latitude, a.longitude);
+    }
+    for (final c in candidateSites) {
+      add(c.latitude, c.longitude);
+    }
+    if (pts.isEmpty) {
+      terrainRegionId = null;
+      notifyListeners();
+      return;
+    }
+    try {
+      terrainRegionId = await api.registerRegion(pts);
+    } catch (_) {
+      terrainRegionId = null; // sem região, o relevo cai para o contorno padrão
+    }
     notifyListeners();
   }
 
@@ -304,6 +372,25 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Transforma um ATIVO comum em gateway: cria um local candidato no mesmo ponto
+  /// (da mesma distribuidora) e já o marca como gateway.
+  Future<void> makeAssetGateway(Asset a) async {
+    final nome = 'Ativo: ${a.name}';
+    CandidateSite? site;
+    for (final c in candidateSites) {
+      if (c.type == 'Ativo (gateway)' && c.name == nome && (c.latitude - a.latitude).abs() < 1e-7 && (c.longitude - a.longitude).abs() < 1e-7) {
+        site = c;
+        break;
+      }
+    }
+    if (site == null) {
+      await addManualCandidateSite(name: nome, type: 'Ativo (gateway)', latitude: a.latitude, longitude: a.longitude, distribuidora: a.distribuidora);
+      site = candidateSites.last;
+    }
+    final jaEhGateway = currentResult?.chosenGateways.any((g) => g.id == site!.id) ?? false;
+    if (!jaEhGateway) await toggleManualGateway(site);
+  }
+
   // Marca/desmarca um local candidato como gateway direto no mapa, sem
   // depender do algoritmo. Só afeta [currentResult] — não vira um cenário
   // salvo no histórico/backend (isso só acontece via runOptimization).
@@ -333,6 +420,7 @@ class AppState extends ChangeNotifier {
         final analysis = await planningApi!.run(
           params: base0.params,
           groups: _planningGroups(gatewayIds: newGateways.map((g) => g.id).toSet()),
+          timeout: const Duration(minutes: 3), // ajuste manual: se o backend não responder, desfaz
         );
         currentResult = ScenarioResult(
           id: base0.id,
@@ -389,7 +477,12 @@ class AppState extends ChangeNotifier {
       scenarioHistory
         ..clear()
         ..addAll(remote.reversed);
-      if (scenarioHistory.isNotEmpty) currentResult = scenarioHistory.last;
+      // Só mostra o último cenário salvo se os gateways dele pertencem aos dados que estão na tela.
+      if (scenarioHistory.isNotEmpty && currentResult == null) {
+        final ids = {for (final c in candidateSites) c.id};
+        final last = scenarioHistory.last;
+        if (dataImported && last.chosenGateways.every((g) => ids.contains(g.id))) currentResult = last;
+      }
       lastSyncError = null;
     } catch (e) {
       lastSyncError = e.toString();

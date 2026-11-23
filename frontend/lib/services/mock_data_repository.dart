@@ -18,6 +18,9 @@ class MockDataRepository implements DataRepository {
   };
 
   @override
+  Future<Map<String, List<double>>> fetchCentros() async => const {};
+
+  @override
   Future<List<String>> fetchDistribuidoras() async {
     await Future.delayed(const Duration(milliseconds: 250));
     return _regions.keys.toList();

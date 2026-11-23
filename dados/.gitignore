@@ -1,0 +1,5 @@
+# arquivos pesados gerados pelo script (nao vao para o GitHub)
+bdgd_cache/
+inventario_distribuidoras.csv
+gridsight_dados_aneel_30.sql
+__pycache__/

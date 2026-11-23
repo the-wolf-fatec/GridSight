@@ -7,10 +7,14 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import '../models/asset.dart';
+import '../models/candidate_site.dart';
 import '../models/terrain_analysis.dart';
+import '../utils/municipios.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../services/optimization_service.dart';
+import '../services/scenario_pdf.dart' show downloadTablePdf;
+import '../widgets/elevation_profile_dialog.dart';
 import '../widgets/section_title.dart';
 import 'import_screen.dart' show distribuidoraColor;
 
@@ -25,6 +29,18 @@ const Color _algoGatewayColor = Color(0xFF8B5CF6); // roxo
 // por causa do relevo (morro no caminho). É a marca visual da influência do relevo.
 const Color _lostColor = Color(0xFFD946EF); // magenta
 
+/// O que a camada de pontos precisa saber: nível de detalhe, se o mapa está em movimento e a área visível (com folga).
+/// Mapa de um mundo só (não repete o Brasil para os lados). O padrão do flutter_map repete tudo em vários "mundos"
+/// e, com coordenadas fora do esperado, quebrava o desenho a cada quadro.
+class _SingleWorldCrs extends Epsg3857 {
+  _SingleWorldCrs();
+
+  @override
+  bool get replicatesWorldLongitude => false;
+}
+
+typedef _PointsView = ({bool low, bool moving, ({double south, double north, double west, double east})? bounds});
+
 // Região padrão em que o mapa abre — centro aproximado do ESTADO DE SÃO
 // PAULO inteiro (não mais só São José dos Campos), já que os dados hoje
 // cobrem várias distribuidoras espalhadas pelo estado. Zoom baixo o
@@ -32,6 +48,9 @@ const Color _lostColor = Color(0xFFD946EF); // magenta
 // manual ainda funcionam pra focar numa região específica depois.
 const LatLng _defaultCenter = LatLng(-22.3, -48.5);
 const double _defaultZoom = 7;
+
+/// Filtro de situação dos ativos no mapa.
+enum _CoverageFilter { all, covered, uncovered, singlePoint, protectedOnly }
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key, this.active = true});
@@ -41,12 +60,20 @@ class MapScreen extends StatefulWidget {
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMixin {
+class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   bool showAssets = true, showCandidates = true, showGateways = true, showCoverage = true;
   bool showRelief = false; // camada de relevo (sombreado + altitude) do backend
-  bool showClutter = false; // camada de árvores (verde) e prédios (laranja) do OpenStreetMap, via backend
   bool showCircles = true; // (fixo ligado) // círculo do alcance máximo (sem relevo), para comparar com a área real
   String? _selectedGatewayId; // gateway tocado: destaca círculo x área com relevo
+  bool showHeat = false; // mapa de calor do sinal (mais quente = sinal mais forte)
+  double _tapRadiusPx = 16;
+  bool showRedundancy = true; // destaca ativos sem reserva (atendidos por um único gateway)
+  // Filtros do mapa: o que está nestes conjuntos fica ESCONDIDO.
+  final Set<String> _hiddenDistribuidoras = {};
+  final Set<String> _hiddenAssetTypes = {};
+  final Set<String> _hiddenCandidateTypes = {};
+  _CoverageFilter _coverageFilter = _CoverageFilter.all;
+  bool get _filtersActive => _hiddenDistribuidoras.isNotEmpty || _hiddenAssetTypes.isNotEmpty || _hiddenCandidateTypes.isNotEmpty || _coverageFilter != _CoverageFilter.all;
   bool _addMode = false; // true = tocar no mapa cria um local candidato ali
   final _map = MapController();
   final _opt = OptimizationService();
@@ -58,6 +85,59 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
   // Pisca-pisca dos buracos do relevo (só roda com a camada "Relevo" ligada).
   late final AnimationController _blink = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
   late final Animation<double> _blinkOpacity = Tween<double>(begin: 0.12, end: 0.95).animate(CurvedAnimation(parent: _blink, curve: Curves.easeInOut));
+
+  // Pisca BEM devagar (ciclo de ~4 s) dos ativos descobertos, mantendo a cor deles.
+  /// Zoom abaixo do qual os pontos viram círculos leves (um só desenho, sem toque). Evita travar com milhares de marcadores.
+  /// No celular o ponto de troca é mais de perto (menos marcadores de uma vez) e a área extra em volta da tela é menor.
+  double _lodZoom = 11.5;
+  double _viewMargin = 0.8;
+  /// Estado do desenho dos pontos. É um ValueNotifier (e não setState) de propósito: mudar isso NÃO refaz a
+  /// tela inteira nem o FlutterMap, então não atrapalha o zoom e o arrastar do mapa.
+  final ValueNotifier<_PointsView> _view = ValueNotifier<_PointsView>((low: true, moving: false, bounds: null));
+  static const int _lowDetailAssetCap = 3000;
+  static const int _lowDetailCandidateCap = 2500;
+  Timer? _moveEnd;
+  Object? _covResult;
+  int _covAssets = -1;
+  Set<int>? _covSet;
+
+  Widget _dyn(Widget Function(_PointsView v) build) =>
+      ValueListenableBuilder<_PointsView>(valueListenable: _view, builder: (_, v, __) => build(v));
+
+  void _onCameraMoved() {
+    _moveEnd?.cancel();
+    final cur = _view.value;
+    if (!cur.moving) _view.value = (low: cur.low, moving: true, bounds: cur.bounds);
+    _moveEnd = Timer(const Duration(milliseconds: 220), () {
+      if (!mounted) return;
+      try {
+        final cam = _map.camera;
+        final vb = cam.visibleBounds;
+        final dh = (vb.north - vb.south) * _viewMargin, dw = (vb.east - vb.west) * _viewMargin;
+        _view.value = (
+          low: cam.zoom < _lodZoom,
+          moving: false,
+          bounds: (south: vb.south - dh, north: vb.north + dh, west: vb.west - dw, east: vb.east + dw),
+        );
+      } catch (_) {
+        _view.value = (low: _view.value.low, moving: false, bounds: null);
+      }
+    });
+  }
+
+  /// Coordenada dentro do Brasil e finita. Ponto fora disso derruba o desenho do mapa
+  /// ("Infinite loop going beyond 30 for world width"), então é ignorado.
+  bool _okLL(double lat, double lon) => lat.isFinite && lon.isFinite && lat >= -35 && lat <= 6 && lon >= -75 && lon <= -33;
+
+  bool _inView(({double south, double north, double west, double east})? b, double lat, double lon) {
+    if (!_okLL(lat, lon)) return false;
+    return b == null || (lat >= b.south && lat <= b.north && lon >= b.west && lon <= b.east);
+  }
+
+  int _stride(int n, int cap) => n <= cap ? 1 : (n / cap).ceil();
+
+  late final AnimationController _slow = AnimationController(vsync: this, duration: const Duration(milliseconds: 4200))..repeat(reverse: true);
+  late final Animation<double> _slowOpacity = Tween<double>(begin: 0.22, end: 1.0).animate(CurvedAnimation(parent: _slow, curve: Curves.easeInOut));
 
   String? _blinkAssetId; // ativo sem sinal tocado: pisca por alguns segundos
   Timer? _blinkAssetTimer;
@@ -85,20 +165,45 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
   }
 
   @override
+  void initState() {
+    super.initState();
+    Municipios.carregar().then((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
   void didUpdateWidget(covariant MapScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     // Volta pra região padrão sempre que o usuário troca PRA essa aba —
     // sem isso, a câmera podia ficar presa numa posição antiga se o mapa
     // já tivesse sido montado antes em segundo plano.
     if (widget.active && !oldWidget.active) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _map.move(_defaultCenter, _defaultZoom));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        // Com dados carregados (de qualquer lugar do Brasil), enquadra as distribuidoras escolhidas;
+        // sem dados, volta para a região padrão.
+        final app = context.read<AppState>();
+        try {
+          if (app.dataImported && (app.assets.isNotEmpty || app.candidateSites.isNotEmpty)) {
+            _fitNow(app);
+          } else {
+            _map.move(_defaultCenter, _defaultZoom);
+          }
+        } catch (_) {
+          // o mapa ainda não está montado: o botão de recentralizar resolve depois
+        }
+      });
     }
   }
 
   @override
   void dispose() {
     _blinkAssetTimer?.cancel();
+    _moveEnd?.cancel();
+    _view.dispose();
     _blink.dispose();
+    _slow.dispose();
     _searchCtrl.dispose();
     _searchDebounce?.cancel();
     super.dispose();
@@ -161,6 +266,232 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
     } catch (_) {
       return null;
     }
+  }
+
+  void _avisa(BuildContext context, String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  static double arredonda(double v, int casas) => double.parse(v.toStringAsFixed(casas));
+
+  static const _gatewayHeader = ['Gateway', 'Tipo', 'Distribuidora', 'Cidade (aprox.)', 'Latitude', 'Longitude', 'Origem', 'Ativos atendidos', 'Ativos que dependem só dele', 'Sinal médio (dBm)', 'Sinal mínimo (dBm)'];
+
+  /// Uma linha por gateway do cenário: onde está, de quem é, quantos ativos atende e quantos dependem só dele.
+  List<List<Object?>> _gatewayRows(AppState app, dynamic result) {
+    final TerrainAnalysis? t = result.terrain as TerrainAnalysis?;
+    final distOf = <String, String>{
+      for (final e in app.candidateSitesByDistribuidora.entries) for (final c in e.value) c.id: e.key,
+    };
+    final rangeKm = result.params.effectiveRangeKm as double;
+    final rows = <List<Object?>>[];
+    for (final g in result.chosenGateways) {
+      final id = g.id as String;
+      final lat = g.latitude as double, lon = g.longitude as double;
+      int atendidos;
+      double? medio, minimo;
+      if (t != null) {
+        final links = t.linksOf(id);
+        atendidos = links.length;
+        if (links.isNotEmpty) {
+          medio = arredonda(links.map((l) => l.rxDbm).reduce((a, b) => a + b) / links.length, 1);
+          minimo = arredonda(links.map((l) => l.rxDbm).reduce(math.min), 1);
+        }
+      } else {
+        atendidos = _assetsCoveredBy(app, g, rangeKm).length;
+      }
+      rows.add([
+        g.name,
+        g.type,
+        distOf[id] ?? '',
+        Municipios.maisProxima(lat, lon) ?? '',
+        arredonda(lat, 6),
+        arredonda(lon, 6),
+        app.manualGatewayIds.contains(id) ? 'Marcado por você' : 'Algoritmo',
+        atendidos,
+        t == null ? '' : t.dependentsOf(id),
+        medio,
+        minimo,
+      ]);
+    }
+    return rows;
+  }
+
+  /// PDF dos gateways do cenário: uma tabela legível, pronta para imprimir ou enviar.
+  Future<void> _exportGatewaysPdf(BuildContext context, AppState app, dynamic result) async {
+    try {
+      String f(Object? v) => v == null ? '' : (v is double ? v.toString().replaceAll('.', ',') : v.toString());
+      final rows = _gatewayRows(app, result);
+      final TerrainAnalysis? t = result.terrain as TerrainAnalysis?;
+      final resumo = <String>[
+        '${result.gatewaysUsed} gateways · ${(result.coveragePercent * 100).toStringAsFixed(1)}% de cobertura (${result.coveredAssets} de ${result.totalAssets} ativos)',
+        if (app.selectedDistribuidoras.isNotEmpty) 'Distribuidoras: ${app.selectedDistribuidoras.join(', ')}',
+        (result.params.useTerrain as bool) ? 'Relevo considerado.' : 'Cálculo só por distância (sem relevo).',
+      ];
+      // Para o PDF: só as colunas que cabem bem numa página (sem tipo nem sinal mínimo).
+      const idx = [0, 2, 3, 4, 5, 6, 7, 8, 9];
+      final header = [for (final i in idx) _gatewayHeader[i]];
+      final body = [
+        for (var n = 0; n < rows.length; n++)
+          ['${n + 1}', for (final i in idx) f(rows[n][i])],
+      ];
+      await downloadTablePdf(
+        filename: 'gateways_gridsight.pdf',
+        titulo: 'Gateways escolhidos',
+        resumo: resumo,
+        header: ['#', ...header],
+        rows: body,
+        flex: const {1: 3, 2: 2.2, 3: 2.2, 4: 1.4, 5: 1.4, 6: 1.6, 7: 1.2, 8: 1.4, 9: 1.2},
+      );
+    } catch (e) {
+      if (context.mounted) _avisa(context, 'Não consegui gerar o PDF: $e');
+    }
+  }
+
+  /// PDF dos ativos que o relevo derruba: onde estão, qual morro bloqueia e qual gateway chegaria até eles.
+  Future<void> _exportLostPdf(BuildContext context, AppState app, TerrainAnalysis t) async {
+    try {
+      const limite = 8000; // PDF muito grande demora para abrir; o aviso no topo diz se cortou
+      final candById = {for (final c in app.candidateSites) c.id: c};
+      String d(double v, int casas) => v.toStringAsFixed(casas).replaceAll('.', ',');
+      final body = <List<String>>[];
+      var total = 0;
+      for (final a in app.assets) {
+        if (!t.lostToTerrainIds.contains(a.id)) continue;
+        total++;
+        if (body.length >= limite) continue;
+        final info = t.lostInfo[a.id];
+        final gw = info?.gatewayId == null ? null : candById[info!.gatewayId!];
+        final b = info?.blocker;
+        body.add([
+          '${body.length + 1}',
+          a.name,
+          a.distribuidora,
+          Municipios.maisProxima(a.latitude, a.longitude) ?? '',
+          d(a.latitude, 5),
+          d(a.longitude, 5),
+          (info != null && info.hasElevation) ? '${info.elevationM.round()}' : '',
+          gw?.name ?? '',
+          b == null ? '' : '${b.elevationM.round()}',
+          b == null ? '' : d(b.aboveLineOfSightM, 0),
+          b == null ? '' : d(b.distanceKm, 2),
+        ]);
+      }
+      await downloadTablePdf(
+        filename: 'ativos_sem_sinal_relevo.pdf',
+        titulo: 'Ativos que perdem sinal por causa do relevo',
+        resumo: [
+          '$total ativo${total == 1 ? '' : 's'} ao alcance de um gateway pela distância, mas sem sinal por causa do relevo.',
+          if (total > limite) 'Lista cortada: mostrando os primeiros $limite de $total.',
+        ],
+        header: const ['#', 'Ativo', 'Distribuidora', 'Cidade (aprox.)', 'Latitude', 'Longitude', 'Altitude (m)', 'Gateway de referencia', 'Morro (m)', 'Acima da visada (m)', 'Morro a (km)'],
+        rows: body,
+        flex: const {1: 2.4, 2: 2, 3: 2, 4: 1.3, 5: 1.3, 6: 1, 7: 2.4, 8: 1, 9: 1.2, 10: 1.1},
+      );
+    } catch (e) {
+      if (context.mounted) _avisa(context, 'Não consegui gerar o PDF: $e');
+    }
+  }
+
+  /// "Cidade · Bairro" de um ponto: a cidade vem na hora (lista do IBGE), o bairro chega do OpenStreetMap.
+  Widget _whereLine(double lat, double lon, {String? bairroCadastro}) {
+    final cidadeOff = Municipios.maisProxima(lat, lon);
+    return FutureBuilder<Map<String, String>?>(
+      future: _reverseGeocode(lat, lon),
+      builder: (context, snap) {
+        final cidade = (snap.data?['cidade'] ?? '').isNotEmpty ? snap.data!['cidade']! : (cidadeOff == null ? '' : '$cidadeOff (aprox.)');
+        final bairro = (snap.data?['bairro'] ?? '').isNotEmpty ? snap.data!['bairro']! : ((bairroCadastro ?? '').isNotEmpty ? bairroCadastro! : '');
+        final txt = [if (cidade.isNotEmpty) cidade, if (bairro.isNotEmpty) bairro].join(' · ');
+        return Text(txt.isEmpty ? (snap.connectionState == ConnectionState.waiting ? 'Procurando cidade e bairro…' : 'Cidade não identificada') : txt,
+            style: const TextStyle(fontSize: 12.5, color: AppColors.textSecondary));
+      },
+    );
+  }
+
+  /// Abre o cartão de um ativo (com a opção de transformá-lo em gateway).
+  void _openAsset(BuildContext context, AppState app, TerrainAnalysis? terrain, Asset asset) {
+    final isLost = terrain != null && !terrain.linkByAsset.containsKey(asset.id) && terrain.lostToTerrainIds.contains(asset.id);
+    if (isLost) _blinkAsset(asset.id);
+    final (note, noteColor) = _assetNote(app, terrain, asset);
+    _showPlaceInfo(
+      context,
+      name: asset.name,
+      type: 'Ativo · ${asset.type}',
+      lat: asset.latitude,
+      lon: asset.longitude,
+      note: note,
+      noteColor: noteColor,
+      extra: _assetExtra(context, app, terrain, asset),
+      bairroCadastro: asset.name,
+      confirmLabel: 'Transformar em gateway',
+      onConfirmGateway: () => app.makeAssetGateway(asset),
+    );
+  }
+
+  /// Abre o cartão de um local candidato (com a opção de marcá-lo como gateway).
+  void _openCandidate(BuildContext context, AppState app, CandidateSite c) {
+    _showPlaceInfo(
+      context,
+      name: c.name,
+      type: 'Local candidato · ${c.type}',
+      lat: c.latitude,
+      lon: c.longitude,
+      onConfirmGateway: () => app.toggleManualGateway(c),
+    );
+  }
+
+  /// Com o mapa afastado os pontos são só bolinhas (sem toque). Este método acha o ativo ou candidato
+  /// mais perto do toque (até ~16 px) e abre o cartão dele — assim dá para marcar gateway em qualquer zoom.
+  bool _tapNearest(BuildContext context, AppState app, LatLng point, TerrainAnalysis? terrain, Set<String> chosenIds, Map<String, String> candDist) {
+    double zoom;
+    try {
+      zoom = _map.camera.zoom;
+    } catch (_) {
+      return false;
+    }
+    final metersPerPx = 156543.03 * math.cos(point.latitude * math.pi / 180) / math.pow(2, zoom);
+    final maxM = metersPerPx * _tapRadiusPx;
+    final dLat = maxM / 111000.0, dLon = maxM / (111000.0 * math.max(0.2, math.cos(point.latitude * math.pi / 180)));
+    Asset? bestA;
+    CandidateSite? bestC;
+    var bestD = double.infinity;
+    double d2(double la, double lo) {
+      final dy = (la - point.latitude) * 111000.0, dx = (lo - point.longitude) * 111000.0 * math.cos(point.latitude * math.pi / 180);
+      return dx * dx + dy * dy;
+    }
+    if (showAssets) {
+      for (var i = 0; i < app.assets.length; i++) {
+        final a = app.assets[i];
+        if ((a.latitude - point.latitude).abs() > dLat || (a.longitude - point.longitude).abs() > dLon) continue;
+        if (_hiddenDistribuidoras.contains(a.distribuidora) || _hiddenAssetTypes.contains(a.type)) continue;
+        final d = d2(a.latitude, a.longitude);
+        if (d < bestD) {
+          bestD = d;
+          bestA = a;
+          bestC = null;
+        }
+      }
+    }
+    if (showCandidates) {
+      for (final c in app.candidateSites) {
+        if ((c.latitude - point.latitude).abs() > dLat || (c.longitude - point.longitude).abs() > dLon) continue;
+        if (chosenIds.contains(c.id) || !_candidateVisible(c, candDist)) continue;
+        final d = d2(c.latitude, c.longitude);
+        if (d < bestD) {
+          bestD = d;
+          bestC = c;
+          bestA = null;
+        }
+      }
+    }
+    if (bestA != null) {
+      _openAsset(context, app, terrain, bestA);
+      return true;
+    }
+    if (bestC != null) {
+      _openCandidate(context, app, bestC);
+      return true;
+    }
+    return false;
   }
 
   /// Mostra nome, tipo, cidade, bairro e lat/lon de um ativo ou candidato
@@ -322,6 +653,9 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
         VoidCallback? onConfirmGateway,
         String? note,
         Color noteColor = AppColors.textSecondary,
+        Widget Function(BuildContext sheetContext)? extra,
+        String? bairroCadastro,
+        String confirmLabel = 'OK, marcar como gateway',
       }) {
     showModalBottomSheet(
       context: context,
@@ -346,12 +680,12 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                 const SizedBox(height: 2),
                 Text(type, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.5)),
                 const SizedBox(height: 14),
+                // Cidade: vem na hora da lista do IBGE (offline); o OpenStreetMap, se responder, confirma.
+                _infoRow('Cidade', cidade.isNotEmpty ? cidade : (Municipios.maisProxima(lat, lon) ?? 'não identificada') + (Municipios.maisProxima(lat, lon) == null ? '' : ' (aprox.)')),
                 if (loading)
                   const Padding(padding: EdgeInsets.symmetric(vertical: 4), child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)))
-                else ...[
-                  _infoRow('Cidade', cidade.isEmpty ? 'não identificada' : cidade),
-                  _infoRow('Bairro', bairro.isEmpty ? 'não identificado' : bairro),
-                ],
+                else
+                  _infoRow('Bairro', bairro.isNotEmpty ? bairro : ((bairroCadastro ?? '').isNotEmpty ? '$bairroCadastro (cadastro)' : 'não identificado')),
                 _infoRow('Latitude', lat.toStringAsFixed(6)),
                 _infoRow('Longitude', lon.toStringAsFixed(6)),
                 if (note != null) ...[
@@ -362,6 +696,10 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                     decoration: BoxDecoration(color: noteColor.withOpacity(0.12), borderRadius: BorderRadius.circular(8), border: Border.all(color: noteColor.withOpacity(0.5))),
                     child: Text(note, style: const TextStyle(fontSize: 12.5, color: AppColors.textPrimary)),
                   ),
+                ],
+                if (extra != null) ...[
+                  const SizedBox(height: 12),
+                  extra(sheetContext),
                 ],
                 if (onConfirmGateway != null) ...[
                   const SizedBox(height: 18),
@@ -374,7 +712,7 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                           Navigator.pop(sheetContext);
                           onConfirmGateway();
                         },
-                        child: const Text('OK, marcar como gateway'),
+                        child: Text(confirmLabel),
                       ),
                     ),
                   ]),
@@ -387,6 +725,195 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
         );
       },
     );
+  }
+
+  // ---------- Filtros ----------
+  bool _assetVisible(AppState app, int i, Set<int> covered, TerrainAnalysis? terrain) {
+    final a = app.assets[i];
+    if (_hiddenDistribuidoras.contains(a.distribuidora)) return false;
+    if (_hiddenAssetTypes.contains(a.type)) return false;
+    final isCovered = covered.contains(i);
+    return switch (_coverageFilter) {
+      _CoverageFilter.all => true,
+      _CoverageFilter.covered => isCovered,
+      _CoverageFilter.uncovered => !isCovered,
+      _CoverageFilter.singlePoint => isCovered && terrain != null && terrain.singlePointAssetIds.contains(a.id),
+      _CoverageFilter.protectedOnly => isCovered && terrain != null && terrain.isProtected(a.id),
+    };
+  }
+
+  bool _candidateVisible(CandidateSite c, Map<String, String> candDist) =>
+      !_hiddenCandidateTypes.contains(c.type) && !_hiddenDistribuidoras.contains(candDist[c.id] ?? '');
+
+  void _openFilters(AppState app, bool hasTerrain) {
+    final dists = <String>{...app.assetsByDistribuidora.keys, ...app.candidateSitesByDistribuidora.keys, for (final a in app.assets) a.distribuidora}.where((d) => d.isNotEmpty).toList()..sort();
+    final assetTypes = {for (final a in app.assets) a.type}.toList()..sort();
+    final candTypes = {for (final c in app.candidateSites) c.type}.toList()..sort();
+    final situations = <(_CoverageFilter, String)>[
+      (_CoverageFilter.all, 'Todos'),
+      (_CoverageFilter.covered, 'Cobertos'),
+      (_CoverageFilter.uncovered, 'Descobertos'),
+      if (hasTerrain) (_CoverageFilter.singlePoint, 'Sem reserva (1 gateway)'),
+      if (hasTerrain) (_CoverageFilter.protectedOnly, 'Com reserva (2+ gateways)'),
+    ];
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
+        void both(VoidCallback f) {
+          setState(f);
+          setSheet(() {});
+        }
+
+        Widget group(String title, List<String> items, Set<String> hidden, {Color Function(String)? colorOf}) {
+          if (items.isEmpty) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 6, children: [
+                for (final t in items)
+                  FilterChip(
+                    label: Text(t, style: const TextStyle(fontSize: 12)),
+                    avatar: colorOf == null ? null : Container(width: 10, height: 10, decoration: BoxDecoration(color: colorOf(t), shape: BoxShape.circle)),
+                    selected: !hidden.contains(t),
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (v) => both(() {
+                      if (v) {
+                        hidden.remove(t);
+                      } else {
+                        hidden.add(t);
+                      }
+                    }),
+                  ),
+              ]),
+            ]),
+          );
+        }
+
+        return ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.85),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Row(children: [
+                const Icon(Icons.filter_alt_outlined, color: AppColors.energy),
+                const SizedBox(width: 8),
+                const Expanded(child: Text('Filtros do mapa', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16))),
+                TextButton(
+                  onPressed: _filtersActive
+                      ? () => both(() {
+                            _hiddenDistribuidoras.clear();
+                            _hiddenAssetTypes.clear();
+                            _hiddenCandidateTypes.clear();
+                            _coverageFilter = _CoverageFilter.all;
+                          })
+                      : null,
+                  child: const Text('Limpar'),
+                ),
+              ]),
+              const SizedBox(height: 4),
+              const Text('Marcado = aparece no mapa. Desmarque para esconder.', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              const SizedBox(height: 14),
+              group('Distribuidoras', dists, _hiddenDistribuidoras, colorOf: distribuidoraColor),
+              group('Tipos de ativo', assetTypes, _hiddenAssetTypes),
+              group('Tipos de local candidato', candTypes, _hiddenCandidateTypes),
+              const Text('Situação dos ativos', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 6, children: [
+                for (final (f, label) in situations)
+                  ChoiceChip(
+                    label: Text(label, style: const TextStyle(fontSize: 12)),
+                    selected: _coverageFilter == f,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (_) => both(() => _coverageFilter = f),
+                  ),
+              ]),
+              if (!hasTerrain)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text('Os filtros de reserva aparecem quando o cenário é calculado com relevo.', style: TextStyle(color: AppColors.textSecondary, fontSize: 11.5)),
+                ),
+              const SizedBox(height: 18),
+              SizedBox(width: double.infinity, child: FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Aplicar'))),
+            ]),
+          ),
+        );
+      }),
+    );
+  }
+
+  // ---------- Mapa de calor ----------
+  /// Anéis concêntricos (do contorno real de cada gateway até perto dele): quanto mais perto do
+  /// gateway, mais quente a cor. O contorno já vem recortado pelo relevo, então a "mancha" respeita os morros.
+  List<Polygon> _heatPolygons(List<dynamic> gateways, TerrainAnalysis terrain) {
+    const levels = <(double, Color)>[
+      (1.0, Color(0x2E2E6FA8)),
+      (0.8, Color(0x3314B8A6)),
+      (0.6, Color(0x40A3D977)),
+      (0.4, Color(0x4DF4D03F)),
+      (0.22, Color(0x59F4A300)),
+      (0.1, Color(0x66E0523A)),
+    ];
+    final out = <Polygon>[];
+    for (final g in gateways) {
+      final fp = terrain.footprints[g.id as String];
+      if (fp == null || fp.isEmpty) continue;
+      final c = LatLng(g.latitude as double, g.longitude as double);
+      for (final (f, color) in levels) {
+        out.add(Polygon(
+          points: [for (final p in fp) LatLng(c.latitude + (p.latitude - c.latitude) * f, c.longitude + (p.longitude - c.longitude) * f)],
+          color: color,
+        ));
+      }
+    }
+    return out;
+  }
+
+  Color _signalColor(double? rxDbm) {
+    if (rxDbm == null) return AppColors.coverage;
+    if (rxDbm >= -85) return const Color(0xFF22C55E);
+    if (rxDbm >= -100) return const Color(0xFFF4D03F);
+    if (rxDbm >= -110) return const Color(0xFFF97316);
+    return const Color(0xFFEF4444);
+  }
+
+  // ---------- Perfil de elevação ----------
+  /// Botão "ver perfil de elevação" do cartão de um ativo: do gateway que o atende (ou o de referência, se perdeu sinal).
+  Widget Function(BuildContext)? _assetExtra(BuildContext context, AppState app, TerrainAnalysis? terrain, Asset asset) {
+    final api = app.planningApi;
+    if (api == null || terrain == null) return null;
+    final gid = terrain.linkByAsset[asset.id]?.gatewayId ?? terrain.lostInfo[asset.id]?.gatewayId;
+    if (gid == null) return null;
+    final gw = app.candidateSites.where((c) => c.id == gid).firstOrNull;
+    if (gw == null) return null;
+    return (sheetContext) => SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () {
+              Navigator.pop(sheetContext);
+              showElevationProfile(
+                context,
+                api: api,
+                fromName: gw.name,
+                fromLat: gw.latitude,
+                fromLon: gw.longitude,
+                toName: asset.name,
+                toLat: asset.latitude,
+                toLon: asset.longitude,
+                gatewayHeightM: app.currentResult?.params.gatewayHeightM ?? 6,
+                rxDbm: terrain.linkByAsset[asset.id]?.rxDbm,
+              );
+            },
+            icon: const Icon(Icons.terrain, size: 18),
+            label: Text('Ver perfil de elevação até ${gw.name}', overflow: TextOverflow.ellipsis),
+          ),
+        );
   }
 
   void _goToPlace(_PlaceResult place) {
@@ -490,7 +1017,9 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                 const SizedBox(width: 8),
                 Expanded(child: Text(gateway.name as String, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16))),
               ]),
-              const SizedBox(height: 12),
+              const SizedBox(height: 6),
+              _whereLine(gateway.latitude as double, gateway.longitude as double),
+              const SizedBox(height: 10),
               if (shapeSummary != null) ...[
                 Container(
                   width: double.infinity,
@@ -521,6 +1050,24 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                     ),
                   ),
                 ),
+              if (terrain != null && terrain.dependencies.containsKey(gateway.id as String)) ...[
+                const SizedBox(height: 14),
+                Builder(builder: (_) {
+                  final alone = terrain.dependentsOf(gateway.id as String);
+                  final backed = (terrain.linksOf(gateway.id as String).length - alone).clamp(0, 1 << 30);
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(color: (alone > 0 ? AppColors.alert : AppColors.coverage).withOpacity(0.12), borderRadius: BorderRadius.circular(8), border: Border.all(color: (alone > 0 ? AppColors.alert : AppColors.coverage).withOpacity(0.5))),
+                    child: Text(
+                      alone == 0
+                          ? 'Segurança: se este gateway cair, nenhum ativo fica sem sinal (todos têm reserva em outro gateway).'
+                          : 'Segurança: se este gateway cair, $alone ativo${alone == 1 ? '' : 's'} fica${alone == 1 ? '' : 'm'} sem sinal. Outros $backed ativo${backed == 1 ? '' : 's'} atendido${backed == 1 ? '' : 's'} por ele têm reserva em outro gateway.',
+                      style: const TextStyle(fontSize: 12.5, color: AppColors.textPrimary),
+                    ),
+                  );
+                }),
+              ],
               const SizedBox(height: 18),
               SizedBox(
                 width: double.infinity,
@@ -588,13 +1135,20 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
     final result = app.currentResult;
     final TerrainAnalysis? terrain = result?.terrain;
     final Set<int> covered;
-    if (result == null) {
-      covered = <int>{};
-    } else if (terrain != null) {
-      // com relevo: quem manda é o backend (sinal enlace a enlace), não o raio
-      covered = {for (var i = 0; i < app.assets.length; i++) if (terrain.isCovered(app.assets[i].id)) i};
+    if (result != null && identical(_covResult, result) && _covAssets == app.assets.length && _covSet != null) {
+      covered = _covSet!; // mesmo cenário e mesmos ativos: reaproveita (build roda a cada movimento do mapa)
     } else {
-      covered = _opt.coveredAssetIndexes(assets: app.assets, gateways: result.chosenGateways, rangeKm: result.params.effectiveRangeKm);
+      if (result == null) {
+        covered = <int>{};
+      } else if (terrain != null) {
+        // com relevo: quem manda é o backend (sinal enlace a enlace), não o raio
+        covered = {for (var i = 0; i < app.assets.length; i++) if (terrain.isCovered(app.assets[i].id)) i};
+      } else {
+        covered = _opt.coveredAssetIndexes(assets: app.assets, gateways: result.chosenGateways, rangeKm: result.params.effectiveRangeKm);
+      }
+      _covResult = result;
+      _covAssets = app.assets.length;
+      _covSet = covered;
     }
     final chosenIds = result?.chosenGateways.map((g) => g.id).toSet() ?? {};
     final hasFootprints = terrain != null && terrain.footprints.isNotEmpty;
@@ -614,6 +1168,10 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
     return SafeArea(
       child: LayoutBuilder(builder: (context, cts) {
         final wide = cts.maxWidth > 900;
+        final phone = cts.maxWidth < 600;
+        _tapRadiusPx = phone ? 26 : 16; // dedo é bem mais largo que o mouse
+        _lodZoom = phone ? 13.0 : 11.5;
+        _viewMargin = phone ? 0.35 : 0.8;
         final mapWidget = ClipRRect(
           borderRadius: BorderRadius.circular(wide ? 16 : 0),
           child: Container(
@@ -623,6 +1181,7 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                 child: FlutterMap(
                   mapController: _map,
                   options: MapOptions(
+                    crs: _SingleWorldCrs(), // sem repetir o mundo: evita o erro "Infinite loop going beyond 30 for world width" e o trabalho extra de desenho
                     initialCenter: _defaultCenter,
                     initialZoom: _defaultZoom,
                     // Rodinha do mouse pra cima = zoom in (mais foco);
@@ -632,12 +1191,15 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                     // InteractiveFlag.all já inclui zoom pela rodinha do
                     // mouse nessa versão do flutter_map (8.x) — não existe
                     // mais um parâmetro separado scrollWheelVelocity.
-                    interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
+                    interactionOptions: const InteractionOptions(flags: InteractiveFlag.all & ~InteractiveFlag.rotate), // sem girar o mapa sem querer (dois dedos)
+                    onPositionChanged: (camera, hasGesture) => _onCameraMoved(),
                     onTap: (tapPosition, point) {
                       if (_addMode) {
                         _handleAddTap(context, app, point);
                       } else {
-                        _explainShadowTap(context, app, point);
+                        // pontos afastados são só bolinhas: acha o mais perto do toque
+                        final handled = _view.value.low && _tapNearest(context, app, point, terrain, chosenIds, candidateDistribuidoraById);
+                        if (!handled) _explainShadowTap(context, app, point);
                       }
                     },
                   ),
@@ -645,19 +1207,17 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                     TileLayer(
                       urlTemplate: _tileUrl(app),
                       userAgentPackageName: 'com.gridsight.app',
+                      tileUpdateTransformer: TileUpdateTransformers.throttle(const Duration(milliseconds: 250)),
+                      evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin, // tile que falhou uma vez tenta de novo
                       errorTileCallback: (tile, error, stack) => debugPrint('Tile falhou: $error'),
                     ),
                     if (showRelief && app.backendBaseUrl != null)
                       TileLayer(
-                        urlTemplate: '${app.backendBaseUrl}/terrain/tiles/{z}/{x}/{y}.png',
+                        urlTemplate: '${app.backendBaseUrl}/terrain/tiles/{z}/{x}/{y}.png${app.terrainRegionId == null ? '' : '?r=${app.terrainRegionId}'}',
                         userAgentPackageName: 'com.gridsight.app',
+                      tileUpdateTransformer: TileUpdateTransformers.throttle(const Duration(milliseconds: 250)),
+                      evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin, // tile que falhou uma vez tenta de novo
                         errorTileCallback: (tile, error, stack) => debugPrint('Tile de relevo falhou: $error'),
-                      ),
-                    if (showClutter && app.backendBaseUrl != null)
-                      TileLayer(
-                        urlTemplate: '${app.backendBaseUrl}/clutter/tiles/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.gridsight.app',
-                        errorTileCallback: (tile, error, stack) => debugPrint('Tile de árvores e prédios falhou: $error'),
                       ),
                     // Círculo do alcance máximo (como seria sem relevo): é o que o relevo "quebra".
                     if (showCircles && result != null && terrain != null && hasFootprints)
@@ -675,7 +1235,7 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                       ]),
                     // Alcance de cada gateway (círculo inteiro) com "buracos" onde o relevo bloqueia.
                     if (showCircles && result != null && terrain != null && hasShadows)
-                      PolygonLayer(polygons: [
+                      _dyn((v) => v.moving ? const SizedBox.shrink() : PolygonLayer(polygons: [
                         for (final g in result.chosenGateways)
                           if (_selectedGatewayId == null || _selectedGatewayId == g.id)
                             Polygon(
@@ -684,10 +1244,10 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                               borderColor: Colors.white.withOpacity(0.8),
                               borderStrokeWidth: 1.6,
                             ),
-                      ]),
+                      ])),
                     // Área sem sinal: pedaços do círculo que NENHUM gateway escolhido atende por causa do relevo. Pisca com o botão "Relevo".
                     if ((showRelief || _peaksBlink) && result != null && terrain != null && hasShadows)
-                      FadeTransition(
+                      _dyn((v) => v.moving ? const SizedBox.shrink() : FadeTransition(
                         opacity: _blinkOpacity,
                         child: PolygonLayer(polygons: [
                           for (final g in result.chosenGateways)
@@ -695,7 +1255,7 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                               for (final poly in (_populatedShadows(app, terrain)[g.id] ?? const <List<LatLng>>[]))
                                 Polygon(points: poly, color: _lostColor, borderStrokeWidth: 1.2, borderColor: _lostColor),
                         ]),
-                      ),
+                      )),
                     // Pontos altos sugeridos para gateways novos.
                     if (app.peakSuggestions.isNotEmpty)
                       MarkerLayer(markers: [
@@ -759,6 +1319,9 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                                 ),
                               ),
                       ]),
+                    // Mapa de calor do sinal (mais quente = mais forte), recortado pelo relevo.
+                    if (showHeat && result != null && terrain != null && hasFootprints)
+                      _dyn((v) => !v.moving ? PolygonLayer(polygons: _heatPolygons(result.chosenGateways, terrain)) : const SizedBox.shrink()),
                     // Com relevo: contorno REAL de onde o sinal chega (irregular, morros recortam a área).
                     if (showCoverage && result != null && terrain != null && hasFootprints && !hasShadows)
                       PolygonLayer(polygons: [
@@ -799,54 +1362,88 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                         ),
                       ]),
                     if (showAssets)
-                      MarkerLayer(markers: [
+                      _dyn((v) => (v.low && !v.moving) ? CircleLayer(circles: [
                         for (var i = 0; i < app.assets.length; i++)
-                          Marker(
-                            point: LatLng(app.assets[i].latitude, app.assets[i].longitude),
-                            width: 26,
-                            height: 26,
-                            child: () {
-                              final asset = app.assets[i];
-                              final isLost = terrain != null && !covered.contains(i) && terrain.lostToTerrainIds.contains(asset.id);
-                              final dot = _tapDot(
-                                () {
-                                  if (isLost) _blinkAsset(asset.id);
-                                  final (note, noteColor) = _assetNote(app, terrain, asset);
-                                  _showPlaceInfo(context, name: asset.name, type: 'Ativo · ${asset.type}', lat: asset.latitude, lon: asset.longitude, note: note, noteColor: noteColor);
-                                },
-                                isLost && _blinkAssetId == asset.id ? 20 : 14,
-                                covered.contains(i) ? AppColors.coverage : (isLost ? _lostColor : AppColors.alert),
-                                Colors.white,
-                                isLost && _blinkAssetId == asset.id ? 2.5 : 1.5,
-                              );
-                              return isLost && (_blinkAssetId == asset.id || showRelief || _peaksBlink) ? FadeTransition(opacity: _blinkOpacity, child: dot) : dot;
-                            }(),
-                          ),
-                      ]),
+                          if (_okLL(app.assets[i].latitude, app.assets[i].longitude) && (i % _stride(app.assets.length, _lowDetailAssetCap) == 0 || !covered.contains(i)) && _assetVisible(app, i, covered, terrain))
+                            CircleMarker(
+                              point: LatLng(app.assets[i].latitude, app.assets[i].longitude),
+                              radius: (showRedundancy && terrain != null && covered.contains(i) && terrain.singlePointAssetIds.contains(app.assets[i].id)) ? 7.5 : 3.6,
+                              color: () {
+                                final asset = app.assets[i];
+                                final isCovered = covered.contains(i);
+                                if (showRedundancy && terrain != null && isCovered && terrain.singlePointAssetIds.contains(asset.id)) return AppColors.energy;
+                                if (showHeat && terrain != null && isCovered) return _signalColor(terrain.linkByAsset[asset.id]?.rxDbm);
+                                final isLost = terrain != null && !isCovered && terrain.lostToTerrainIds.contains(asset.id);
+                                return isCovered ? AppColors.coverage : (isLost ? _lostColor : AppColors.alert);
+                              }(),
+                            ),
+                      ]) : const SizedBox.shrink()),
+                    if (showAssets)
+                      _dyn((v) => (!v.low && !v.moving) ? MarkerLayer(markers: [
+                        for (var i = 0; i < app.assets.length; i++)
+                          if (_inView(v.bounds, app.assets[i].latitude, app.assets[i].longitude) && _assetVisible(app, i, covered, terrain))
+                            Marker(
+                              point: LatLng(app.assets[i].latitude, app.assets[i].longitude),
+                              width: phone ? 38 : 26,
+                              height: phone ? 38 : 26,
+                              child: () {
+                                final asset = app.assets[i];
+                                final isCovered = covered.contains(i);
+                                final isLost = terrain != null && !isCovered && terrain.lostToTerrainIds.contains(asset.id);
+                                final single = showRedundancy && terrain != null && isCovered && terrain.singlePointAssetIds.contains(asset.id);
+                                var color = isCovered ? AppColors.coverage : (isLost ? _lostColor : AppColors.alert);
+                                var size = isLost && _blinkAssetId == asset.id ? 20.0 : 14.0;
+                                var borderWidth = isLost && _blinkAssetId == asset.id ? 2.5 : 1.5;
+                                if (single) {
+                                  color = AppColors.energy; // sem reserva: só um gateway atende
+                                  size = 24;
+                                  borderWidth = 3;
+                                } else if (showHeat && terrain != null && isCovered) {
+                                  color = _signalColor(terrain.linkByAsset[asset.id]?.rxDbm);
+                                }
+                                final dot = _tapDot(
+                                  () => _openAsset(context, app, terrain, asset),
+                                  size,
+                                  color,
+                                  Colors.white,
+                                  borderWidth,
+                                );
+                                if (isLost && (_blinkAssetId == asset.id || showRelief || _peaksBlink)) {
+                                  return FadeTransition(opacity: _blinkOpacity, child: dot);
+                                }
+                                // Descoberto (sem sinal): mantém a cor e pisca bem devagar.
+                                if (!isCovered && result != null) return FadeTransition(opacity: _slowOpacity, child: dot);
+                                return dot;
+                              }(),
+                            ),
+                      ]) : const SizedBox.shrink()),
                     if (showCandidates)
-                      MarkerLayer(markers: [
+                      _dyn((v) => (v.low && !v.moving) ? CircleLayer(circles: [
+                        for (var k = 0; k < app.candidateSites.length; k += _stride(app.candidateSites.length, _lowDetailCandidateCap))
+                          if (_okLL(app.candidateSites[k].latitude, app.candidateSites[k].longitude) && !chosenIds.contains(app.candidateSites[k].id) && _candidateVisible(app.candidateSites[k], candidateDistribuidoraById))
+                            CircleMarker(
+                              point: LatLng(app.candidateSites[k].latitude, app.candidateSites[k].longitude),
+                              radius: 2.6,
+                              color: (candidateDistribuidoraById[app.candidateSites[k].id] != null ? distribuidoraColor(candidateDistribuidoraById[app.candidateSites[k].id]!) : AppColors.textSecondary).withOpacity(0.8),
+                            ),
+                      ]) : const SizedBox.shrink()),
+                    if (showCandidates)
+                      _dyn((v) => (!v.low && !v.moving) ? MarkerLayer(markers: [
                         for (final c in app.candidateSites)
-                          if (!chosenIds.contains(c.id))
+                          if (_inView(v.bounds, c.latitude, c.longitude) && !chosenIds.contains(c.id) && _candidateVisible(c, candidateDistribuidoraById))
                             Marker(
                               point: LatLng(c.latitude, c.longitude),
-                              width: 22,
-                              height: 22,
+                              width: phone ? 36 : 22,
+                              height: phone ? 36 : 22,
                               child: _tapDot(
-                                    () => _showPlaceInfo(
-                                  context,
-                                  name: c.name,
-                                  type: 'Local candidato · ${c.type}',
-                                  lat: c.latitude,
-                                  lon: c.longitude,
-                                  onConfirmGateway: () => app.toggleManualGateway(c),
-                                ),
+                                () => _openCandidate(context, app, c),
                                 14,
                                 (candidateDistribuidoraById[c.id] != null ? distribuidoraColor(candidateDistribuidoraById[c.id]!) : AppColors.textSecondary).withOpacity(0.75),
                                 AppColors.textSecondary,
                                 1.6,
                               ),
                             ),
-                      ]),
+                      ]) : const SizedBox.shrink()),
                     if (showGateways && result != null)
                       MarkerLayer(markers: [
                         for (final g in result.chosenGateways)
@@ -869,7 +1466,7 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                   ],
                 ),
               ),
-              Positioned(top: wide ? 12 : 8, left: wide ? 12 : 8, child: _Legend(key: ValueKey(wide), distribuidoras: app.candidateSitesByDistribuidora.keys.toList(), hasTerrain: terrain != null, showClutter: showClutter, initiallyOpen: wide)),
+              Positioned(top: wide ? 12 : 8, left: wide ? 12 : 8, child: _Legend(key: ValueKey(wide), distribuidoras: app.candidateSitesByDistribuidora.keys.toList(), hasTerrain: terrain != null, initiallyOpen: wide)),
               Positioned(
                 top: wide ? 12 : 8,
                 right: wide ? 12 : 8,
@@ -877,6 +1474,8 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
                   _recenterButton(() => _fitNow(app)),
                   const SizedBox(height: 8),
                   _addModeButton(_addMode, () => setState(() => _addMode = !_addMode)),
+                  const SizedBox(height: 8),
+                  _filterButton(_filtersActive, () => _openFilters(app, terrain != null)),
                   if (terrain != null && (terrain.lostToTerrainIds.isNotEmpty || app.peakSuggestions.isNotEmpty)) ...[
                     const SizedBox(height: 8),
                     _peakButton(
@@ -985,9 +1584,27 @@ class _MapScreenState extends State<MapScreen> with SingleTickerProviderStateMix
           ('Gateways escolhidos', showGateways, (v) => setState(() => showGateways = v)),
           if (!hasFootprints) ('Área de cobertura', showCoverage, (v) => setState(() => showCoverage = v)),
           if (app.backendBaseUrl != null) ('Relevo', showRelief, (v) => setState(() { showRelief = v; _syncBlink(); })),
-          if (app.backendBaseUrl != null) ('Árvores e prédios', showClutter, (v) => setState(() => showClutter = v)),
+          if (terrain != null && hasFootprints) ('Mapa de calor (vermelho = sinal mais forte)', showHeat, (v) => setState(() => showHeat = v)),
+          if (terrain != null) ('Redundância (bolinha âmbar GRANDE = só 1 gateway)', showRedundancy, (v) => setState(() => showRedundancy = v)),
         ];
-        final controls = _controls(app, result, toggles);
+        final controls = _controls(app, result, toggles, extras: [
+          if (result != null && result.chosenGateways.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: () => _exportGatewaysPdf(context, app, result),
+              icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+              label: const Text('Baixar gateways (PDF)'),
+            ),
+          ],
+          if (terrain != null && terrain.lostToTerrainIds.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () => _exportLostPdf(context, app, terrain),
+              icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+              label: Text('Baixar ativos sem sinal (PDF, ${terrain.lostToTerrainIds.length})'),
+            ),
+          ],
+        ]);
 
         // Em telas largas: mapa + painel lado a lado, com título e dica
         // acima. Em celular/tablet: o mapa ocupa a tela quase inteira
@@ -1095,6 +1712,23 @@ Widget _peakButton({required bool active, required bool busy, required VoidCallb
   ),
 );
 
+Widget _filterButton(bool active, VoidCallback onPressed) => Tooltip(
+  message: 'Filtros do mapa',
+  child: Material(
+    color: active ? AppColors.energy : AppColors.surface.withOpacity(0.92),
+    borderRadius: BorderRadius.circular(10),
+    child: InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onPressed,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.divider)),
+        child: Icon(Icons.filter_alt_outlined, color: active ? Colors.black : AppColors.textPrimary, size: 20),
+      ),
+    ),
+  ),
+);
+
 Widget _recenterButton(VoidCallback onPressed) => Material(
   color: AppColors.surface.withOpacity(0.92),
   borderRadius: BorderRadius.circular(10),
@@ -1123,10 +1757,9 @@ Widget _addModeButton(bool active, VoidCallback onPressed) => Material(
 /// não cobrir o mapa; no tablet/tela grande começa aberta. Quando aberta,
 /// rola se for maior que a área disponível.
 class _Legend extends StatefulWidget {
-  const _Legend({super.key, required this.distribuidoras, this.hasTerrain = false, this.showClutter = false, this.initiallyOpen = true});
+  const _Legend({super.key, required this.distribuidoras, this.hasTerrain = false, this.initiallyOpen = true});
   final List<String> distribuidoras;
   final bool hasTerrain;
-  final bool showClutter;
   final bool initiallyOpen;
 
   @override
@@ -1170,8 +1803,7 @@ class _LegendState extends State<_Legend> {
                 if (hasTerrain) _legendItem(Colors.white70, 'Alcance sem relevo', BoxShape.circle, filled: false),
                 if (hasTerrain) _legendItem(_lostColor.withOpacity(0.6), 'Área sem transmissão (relevo)', BoxShape.rectangle, size: 11),
                 if (hasTerrain) _legendItem(AppColors.coverage, 'Cobertura com relevo', BoxShape.rectangle, size: 11),
-                if (widget.showClutter) _legendItem(const Color(0xFF2EA043), 'Árvores / mata', BoxShape.rectangle, size: 11),
-                if (widget.showClutter) _legendItem(const Color(0xFFE07028), 'Prédios', BoxShape.rectangle, size: 11),
+                if (hasTerrain) _legendItem(AppColors.energy, 'Ativo com 1 gateway só (maior)', BoxShape.circle, size: 14),
                 if (distribuidoras.isEmpty)
                   _legendItem(AppColors.textSecondary, 'Local candidato', BoxShape.rectangle, filled: false)
                 else
@@ -1186,6 +1818,15 @@ class _LegendState extends State<_Legend> {
   }
 }
 
+Widget _legendIcon(IconData icon, Color color, String label) => Padding(
+  padding: const EdgeInsets.symmetric(vertical: 2),
+  child: Row(mainAxisSize: MainAxisSize.min, children: [
+    Icon(icon, size: 16, color: color),
+    const SizedBox(width: 4),
+    Flexible(child: Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textPrimary))),
+  ]),
+);
+
 Widget _legendItem(Color color, String label, BoxShape shape, {bool filled = true, double size = 10}) => Padding(
   padding: const EdgeInsets.symmetric(vertical: 2),
   child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1195,7 +1836,7 @@ Widget _legendItem(Color color, String label, BoxShape shape, {bool filled = tru
   ]),
 );
 
-Widget _controls(AppState app, dynamic result, List<(String, bool, ValueChanged<bool>)> toggles) {
+Widget _controls(AppState app, dynamic result, List<(String, bool, ValueChanged<bool>)> toggles, {List<Widget> extras = const []}) {
   final TerrainAnalysis? terrain = result?.terrain as TerrainAnalysis?;
   return Card(
     child: Padding(
@@ -1227,8 +1868,6 @@ Widget _controls(AppState app, dynamic result, List<(String, bool, ValueChanged<
           _resultLine('Gateways usados', '${result.gatewaysUsed}'),
           _resultLine('Ativos cobertos', '${result.coveredAssets} / ${result.totalAssets}'),
           _resultLine('Relevo', result.params.useTerrain ? 'considerado' : 'não considerado'),
-          if (result.params.useTerrain)
-            _resultLine('Árvores e prédios', (terrain?.clutterUsed ?? false) ? 'considerados' : 'não considerados'),
           _resultLine('Tempo de processamento', '${result.processingTime.inMilliseconds} ms'),
         ],
         if (terrain != null && result != null && result.params.useTerrain) ...[
@@ -1237,6 +1876,7 @@ Widget _controls(AppState app, dynamic result, List<(String, bool, ValueChanged<
         ],
         if (result != null && !(result.params.useTerrain as bool))
           _noticeBox('Este cenário não considerou o relevo.', AppColors.primaryLight),
+        ...extras,
       ]),
     ),
   );

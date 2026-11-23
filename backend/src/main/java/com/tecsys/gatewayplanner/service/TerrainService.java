@@ -23,7 +23,8 @@ import java.util.stream.Stream;
  *
  * Onde procura (usa a primeira pasta que tiver .hgt):
  *   1. gridsight.terrain.dir (application.properties) ou a variável TERRAIN_DIR
- *   2. ./terrain (backend/terrain), ./backend/terrain, ../backend/terrain, ../frontend/terrain, ../terrain (e uma subpasta de cada)
+ *   2. ./terrain (backend/terrain), ./backend/terrain, ../backend/terrain, ../frontend/terrain, ../terrain (e uma subpasta de cada),
+ *      e a pasta fixa ~/gridsight-terrain (C:\Users\voce\gridsight-terrain)
  *   3. se ainda não achou: varre o projeto inteiro (a pasta acima do backend), em até 6 níveis,
  *      e usa a pasta com mais .hgt
  *
@@ -100,6 +101,8 @@ public class TerrainService {
         candidates.add(Path.of("../frontend/terrain"));
         candidates.add(Path.of("../terrain"));
         candidates.add(Path.of("./frontend/terrain"));
+        // Pasta fixa, fora do projeto: funciona de qualquer cópia do projeto (ex.: C:\Users\voce\gridsight-terrain)
+        candidates.add(Path.of(System.getProperty("user.home", "."), "gridsight-terrain"));
 
         List<String> tried = new ArrayList<>();
         Path chosen = null;

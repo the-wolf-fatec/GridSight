@@ -31,6 +31,10 @@ public class CandidateSiteService {
     // Neoenergia Elektro) ainda só têm locais candidatos importados, sem
     // nenhum ativo ainda. Sem isso, elas não apareceriam no dropdown do
     // app até ter pelo menos um Asset gravado.
+    public List<Object[]> findCentros() {
+        return repository.findCentros();
+    }
+
     public List<String> findDistribuidoras() {
         return repository.findDistinctDistribuidoras();
     }

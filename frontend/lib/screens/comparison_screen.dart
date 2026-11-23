@@ -5,6 +5,7 @@ import '../models/scenario_result.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
+import '../widgets/pdf_button.dart';
 import '../widgets/section_title.dart';
 
 class ComparisonScreen extends StatefulWidget {
@@ -78,11 +79,14 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
               ]),
             ),
           ),
+          const SizedBox(height: 16),
+          const SizedBox(height: 16),
+          _compareTable(history),
           const SizedBox(height: 20),
           const Text('Detalhamento dos cenários', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
           const SizedBox(height: 12),
           for (final r in history.toList().reversed)
-            _scenarioCard(r, () => _confirm('Apagar cenário?', 'O cenário "${r.label}" será removido da comparação. Essa ação não pode ser desfeita.', 'Apagar', () => app.removeScenario(r.id))),
+            _scenarioCard(context, app, r, () => _confirm('Apagar cenário?', 'O cenário "${r.label}" será removido da comparação. Essa ação não pode ser desfeita.', 'Apagar', () => app.removeScenario(r.id))),
       ]),
     );
   }
@@ -124,63 +128,193 @@ Widget _syncErrorBanner(String message) => Container(
       ]),
     );
 
-Widget _scenarioCard(ScenarioResult r, VoidCallback onDelete) {
-  final stats = <(String, String)>[
-    ('Ativos cobertos', '${r.coveredAssets} / ${r.totalAssets}'),
-    ('Ativos não cobertos', '${r.totalAssets - r.coveredAssets}'),
-    ('Gateways usados', '${r.gatewaysUsed}'),
-    ('Alcance ref.', '${r.params.rangeKm.toStringAsFixed(1)} km'),
-    ('Potência', '${r.params.transmissionPowerDbm.toStringAsFixed(0)} dBm'),
-    ('Alcance efetivo', '${r.params.effectiveRangeKm.toStringAsFixed(2)} km'),
-    ('Meta', '${(r.params.minCoverageTarget * 100).toStringAsFixed(0)}%'),
-    ('Máx. gateways', '${r.params.maxGateways}'),
-    ('Relevo', r.params.useTerrain ? 'considerado' : 'não considerado'),
-    ('Tempo', '${r.processingTime.inMilliseconds} ms'),
-  ];
-
+/// Tabela lado a lado para comparar os cenários de uma vez (rola para o lado em tela estreita).
+Widget _compareTable(List<ScenarioResult> history) {
+  const head = TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textSecondary);
+  const cellStyle = TextStyle(fontSize: 12.5);
+  final bestCoverage = history.map((r) => r.coveragePercent).reduce((a, b) => a > b ? a : b);
   return Card(
-    margin: const EdgeInsets.only(bottom: 12),
     child: Padding(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Expanded(child: Text(r.label, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5))),
-          const SizedBox(width: 8),
-          IconButton(onPressed: onDelete, icon: const Icon(Icons.delete_outline, size: 20), color: AppColors.textSecondary, tooltip: 'Apagar cenário', splashRadius: 20, constraints: const BoxConstraints(), padding: EdgeInsets.zero),
-        ]),
-        const SizedBox(height: 8),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(color: AppColors.coverage.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
-            child: Text('${(r.coveragePercent * 100).toStringAsFixed(1)}% cobertura', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.coverage)),
-          ),
-        ),
-        const SizedBox(height: 14),
-        Wrap(spacing: 20, runSpacing: 10, children: [for (final (l, v) in stats) _miniStat(l, v)]),
-        if (r.chosenGateways.isNotEmpty) ...[
-          const SizedBox(height: 14),
-          const Divider(height: 1),
-          const SizedBox(height: 10),
-          const Text('Gateways escolhidos', style: TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              for (final g in r.chosenGateways)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(color: AppColors.energy.withOpacity(0.12), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppColors.energy.withOpacity(0.35))),
-                  child: Text(g.name, style: const TextStyle(fontSize: 11.5, color: AppColors.textPrimary)),
-                ),
+        const Text('Comparação lado a lado', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+        const SizedBox(height: 4),
+        const Text('Em destaque: maior cobertura.', style: TextStyle(fontSize: 11.5, color: AppColors.textSecondary)),
+        const SizedBox(height: 10),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            headingRowHeight: 38,
+            dataRowMinHeight: 38,
+            dataRowMaxHeight: 44,
+            columnSpacing: 22,
+            columns: const [
+              DataColumn(label: Text('Cenário', style: head)),
+              DataColumn(label: Text('Cobertura', style: head)),
+              DataColumn(label: Text('Gateways', style: head)),
+              DataColumn(label: Text('Descobertos', style: head)),
+              DataColumn(label: Text('Sem reserva', style: head)),
+              DataColumn(label: Text('Relevo', style: head)),
+            ],
+            rows: [
+              for (var i = 0; i < history.length; i++)
+                DataRow(cells: [
+                  DataCell(Text('C${i + 1} · ${history[i].label}', style: cellStyle)),
+                  DataCell(Text('${(history[i].coveragePercent * 100).toStringAsFixed(1)}%', style: cellStyle.copyWith(fontWeight: history[i].coveragePercent == bestCoverage ? FontWeight.w800 : FontWeight.w400, color: history[i].coveragePercent == bestCoverage ? AppColors.coverage : null))),
+                  DataCell(Text('${history[i].gatewaysUsed}', style: cellStyle)),
+                  DataCell(Text('${history[i].totalAssets - history[i].coveredAssets}', style: cellStyle)),
+                  DataCell(Text(history[i].terrain == null ? '-' : '${history[i].terrain!.singlePointCount}', style: cellStyle)),
+                  DataCell(Text(history[i].params.useTerrain ? 'sim' : 'não', style: cellStyle)),
+                ]),
             ],
           ),
-        ],
+        ),
       ]),
     ),
   );
+}
+
+Widget _scenarioCard(BuildContext context, AppState app, ScenarioResult r, VoidCallback onDelete) => _ScenarioCard(result: r, onDelete: onDelete);
+
+/// Cartão de um cenário: fechado mostra só uma linha (nome, cobertura, gateways, descobertos);
+/// ao tocar abre com TUDO dentro (números, parâmetros, relevo, gateways e as ações).
+class _ScenarioCard extends StatefulWidget {
+  const _ScenarioCard({required this.result, required this.onDelete});
+  final ScenarioResult result;
+  final VoidCallback onDelete;
+
+  @override
+  State<_ScenarioCard> createState() => _ScenarioCardState();
+}
+
+class _ScenarioCardState extends State<_ScenarioCard> {
+  bool _open = false;
+
+  String _pct(double v) => '${(v * 100).toStringAsFixed(1)}%'.replaceAll('.', ',');
+
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.result;
+    final app = context.read<AppState>();
+    final t = r.terrain;
+    final naoCobertos = r.totalAssets - r.coveredAssets;
+
+    final numeros = <(String, String)>[
+      ('Ativos', '${r.totalAssets}'),
+      ('Cobertos', '${r.coveredAssets}'),
+      ('Não cobertos', '$naoCobertos'),
+      ('Gateways usados', '${r.gatewaysUsed}'),
+      if (app.candidateSites.isNotEmpty) ('Locais candidatos (dados carregados agora)', '${app.candidateSites.length}'),
+      if (t != null) ('Sem reserva (1 gateway só)', '${t.singlePointCount}'),
+      if (t != null) ('Perdidos por relevo', '${t.lostToTerrainIds.length}'),
+      if (t != null) ('Com reserva (2+ gateways)', '${t.overlappedAssets}'),
+      ('Tempo', '${r.processingTime.inMilliseconds} ms'),
+    ];
+    final parametros = <(String, String)>[
+      ('Alcance ref.', '${r.params.rangeKm.toStringAsFixed(1)} km'),
+      ('Potência', '${r.params.transmissionPowerDbm.toStringAsFixed(0)} dBm'),
+      ('Alcance efetivo', '${r.params.effectiveRangeKm.toStringAsFixed(2)} km'),
+      ('Meta de cobertura', '${(r.params.minCoverageTarget * 100).toStringAsFixed(0)}%'),
+      ('Máx. gateways', '${r.params.maxGateways}'),
+      ('Relevo', r.params.useTerrain ? 'considerado' : 'não considerado'),
+    ];
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      clipBehavior: Clip.antiAlias,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        InkWell(
+          onTap: () => setState(() => _open = !_open),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(children: [
+              Icon(_open ? Icons.expand_less : Icons.expand_more, color: AppColors.textSecondary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(r.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+                  const SizedBox(height: 2),
+                  Text('${r.gatewaysUsed} gateway${r.gatewaysUsed == 1 ? '' : 's'} · $naoCobertos descoberto${naoCobertos == 1 ? '' : 's'}',
+                      style: const TextStyle(fontSize: 11.5, color: AppColors.textSecondary)),
+                ]),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(color: AppColors.coverage.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+                child: Text(_pct(r.coveragePercent), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.coverage)),
+              ),
+            ]),
+          ),
+        ),
+        if (_open) ...[
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Resultado', style: TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 22, runSpacing: 10, children: [for (final (l, v) in numeros) _miniStat(l, v)]),
+              const SizedBox(height: 16),
+              const Text('Parâmetros', style: TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 22, runSpacing: 10, children: [for (final (l, v) in parametros) _miniStat(l, v)]),
+              if (r.chosenGateways.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text('Gateways escolhidos (${r.chosenGateways.length})', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 220),
+                  child: SingleChildScrollView(
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (final g in r.chosenGateways)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(color: AppColors.energy.withOpacity(0.12), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppColors.energy.withOpacity(0.35))),
+                            child: Text(g.name, style: const TextStyle(fontSize: 11.5, color: AppColors.textPrimary)),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              const Divider(height: 1),
+              const SizedBox(height: 10),
+              Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                FilledButton.icon(
+                  onPressed: () {
+                    app.openScenario(r);
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cenário aberto: veja o mapa e os indicadores.')));
+                  },
+                  icon: const Icon(Icons.map_outlined, size: 18),
+                  label: const Text('Abrir no mapa'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    app.reuseScenarioParams(r);
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Parâmetros deste cenário copiados para a aba Parâmetros.')));
+                  },
+                  icon: const Icon(Icons.copy_all_outlined, size: 18),
+                  label: const Text('Usar estes parâmetros'),
+                ),
+                ScenarioPdfButton(result: r),
+                TextButton.icon(
+                  onPressed: widget.onDelete,
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: const Text('Apagar'),
+                  style: TextButton.styleFrom(foregroundColor: AppColors.alert),
+                ),
+              ]),
+            ]),
+          ),
+        ],
+      ]),
+    );
+  }
 }
 
 Widget _miniStat(String label, String value) => Column(

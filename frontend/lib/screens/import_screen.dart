@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
+import '../widgets/distribuidora_regioes.dart';
 import '../widgets/manual_asset_form_modal.dart';
 import '../widgets/manual_candidate_form_modal.dart';
 import '../widgets/section_title.dart';
@@ -46,22 +47,7 @@ class _ImportScreenState extends State<ImportScreen> {
                 else if (app.distribuidoras.isEmpty)
                   const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('Nenhuma distribuidora encontrada.', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)))
                 else
-                  Column(
-                    children: [
-                      for (final d in app.distribuidoras)
-                        CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          controlAffinity: ListTileControlAffinity.leading,
-                          value: app.selectedDistribuidoras.contains(d),
-                          onChanged: (_) => app.toggleDistribuidoraSelection(d),
-                          title: Row(children: [
-                            Container(width: 10, height: 10, margin: const EdgeInsets.only(right: 8), decoration: BoxDecoration(color: distribuidoraColor(d), shape: BoxShape.circle)),
-                            Expanded(child: Text(d, style: const TextStyle(fontSize: 13.5), overflow: TextOverflow.ellipsis)),
-                          ]),
-                        ),
-                    ],
-                  ),
+                  DistribuidoraRegioes(app: app, colorOf: distribuidoraColor),
                 const SizedBox(height: 12),
                 ElevatedButton.icon(
                   onPressed: app.loadingData || app.selectedDistribuidoras.isEmpty ? null : () => app.importData(),
