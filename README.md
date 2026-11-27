@@ -45,15 +45,6 @@ e a chave **Relevo**. Fixos: 915 MHz, sensibilidade -120 dBm, ativo a 5 m.
 - **Painel da direita:** gateways sem relevo x com relevo.
 - **Camadas → "Relevo":** sombreado do terreno recortado no formato de SP.
 
-## Árvores e prédios
-Chave **Árvores e prédios** (em Parâmetros, junto do Relevo). Matas/florestas (altura de copa 15 m) e prédios (tag `height`,
-ou `building:levels` x 3,2 m, ou 8 m) vêm do OpenStreetMap via Overpass e entram no cálculo como obstáculos (difração),
-somados à altura do terreno. Obstáculos a menos de 40 m das antenas são ignorados.
-No **Mapa**, a camada **Árvores e prédios** (em Camadas) mostra as matas em verde e os prédios em laranja (a partir do zoom 12;
-a primeira vez que uma região aparece, o backend baixa os dados dela, o que leva alguns segundos).
-O `gridsight_dados.py` já deixa essa pasta pré-carregada; o que faltar, o backend baixa na primeira vez (ladrilhos de ~5 km, precisa de internet) e guarda em `backend/clutter/`
-(ou na pasta da variável `CLUTTER_DIR`); depois funciona sem internet. Se o download falhar, o app avisa e calcula só com o relevo.
-
 ## Limites (leia)
 - Modelo próprio (espaço livre + difração, Deygout), comparado com o Longley-Rice em 600 enlaces de SP de 0,8 a 10 km:
   correlação 0,92, em média ~5 dB mais otimista (desvio ±7 dB). **Acima de ~10 km é extrapolação.** Não é medição de campo.
